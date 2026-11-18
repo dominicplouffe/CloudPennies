@@ -1,0 +1,108 @@
+{
+  "name": "cloudpennies",
+  "productName": "CloudPennies",
+  "version": "0.1.0",
+  "description": "CloudPennies \u2014 Every cloud dollar has a story. A simple, deep AWS cost analysis desktop app.",
+  "author": "CloudPennies",
+  "license": "MIT",
+  "private": true,
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "dev:app": "npm run build && electron .",
+    "build:ui": "vite build",
+    "build:main": "node scripts/build-main.mjs",
+    "build": "npm run build:ui && npm run build:main",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "icons": "node scripts/make-icons.cjs",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "dist:win": "npm run build && electron-builder --win",
+    "demo-report": "tsx scripts/demo-report.ts"
+  },
+  "build": {
+    "appId": "app.cloudpennies.desktop",
+    "productName": "CloudPennies",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "category": "Office;Finance",
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "icon": "build/icons"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "publish": null
+  },
+  "devDependencies": {
+    "@aws-sdk/client-budgets": "^3.1171.0",
+    "@aws-sdk/client-cloudtrail": "^3.1171.0",
+    "@aws-sdk/client-cloudwatch": "^3.1171.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1171.0",
+    "@aws-sdk/client-cost-explorer": "^3.1171.0",
+    "@aws-sdk/client-cost-optimization-hub": "^3.1171.0",
+    "@aws-sdk/client-ec2": "^3.1171.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.1171.0",
+    "@aws-sdk/client-sts": "^3.1171.0",
+    "@aws-sdk/credential-providers": "^3.1171.0",
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@smithy/shared-ini-file-loader": "^4.7.2",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.3.4",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  },
+  "homepage": "https://github.com/dominicplouffe/CloudPennies",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dominicplouffe/CloudPennies.git"
+  }
+}

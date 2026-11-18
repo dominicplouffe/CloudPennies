@@ -2,19 +2,36 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  bucketByMonth,
   buildCostAndUsageRequest,
   buildFilter,
+  buildResourceCostRequest,
   cacheKey,
   cacheTtlMs,
   clampEnd,
   isFresh,
   mapCostAndUsage,
+  matchAllExpression,
+  normalizeResourceKeys,
   QUERY_TTL_MS,
   SETTLED_TTL_MS,
   stripTagKey,
   totalsByKey,
+  usesResourceId,
 } from '../electron/aws/ce';
-import { classifyError, deniedAction, friendlyConnectError, maskKeyId, WarningSink } from '../electron/aws/errors';
+import { classifyError, deniedAction, friendlyConnectError, maskKeyId, RESOURCE_LEVEL_DISABLED_MESSAGE, resourceCostError, WarningSink } from '../electron/aws/errors';
+import {
+  assumeRoleWarning,
+  isValidRoleName,
+  memberRoleArn,
+  membersNotInspectedWarning,
+  normalizeRoleName,
+  partitionOf,
+  selectMemberAccounts,
+  stampAccount,
+  stsRegion,
+} from '../electron/aws/members';
+import { emptyFindings } from '../electron/aws/resources';
 import {
   combineCoverage,
   commitmentTotals,
@@ -34,8 +51,8 @@ import {
 } from '../electron/aws/mappers';
 import { toIsoDate } from '../electron/aws/dates';
 import { pool } from '../electron/aws/pool';
-import { IAM_POLICY_BILLING, IAM_POLICY_SCAN, iamPolicyJson } from '../src/core/iamPolicy';
-import type { CostQuery } from '../src/core/types';
+import { IAM_POLICY_ASSUME, IAM_POLICY_BILLING, IAM_POLICY_SCAN, iamPolicyJson } from '../src/core/iamPolicy';
+import type { AccountInfo, CostQuery, CostRow } from '../src/core/types';
 
 const TODAY = '2026-11-18';
 const NO_CREDITS = { Not: { Dimensions: { Key: 'RECORD_TYPE', Values: ['Credit', 'Refund'] } } };
@@ -119,6 +136,181 @@ describe('query -> GetCostAndUsage request', () => {
 
   it('rejects more than two group-bys', () => {
     expect(() => buildCostAndUsageRequest({ ...base, groupBy: ['SERVICE', 'REGION', 'OPERATION'] }, 'UnblendedCost', TODAY)).toThrow();
+  });
+});
+
+describe('resource-level queries (GetCostAndUsageWithResources)', () => {
+  const rq: CostQuery = { start: '2026-11-10', end: '2026-11-18', granularity: 'DAILY', groupBy: ['RESOURCE_ID'] };
+
+  it('is used when grouping by or filtering on RESOURCE_ID', () => {
+    expect(usesResourceId(rq)).toBe(true);
+    expect(usesResourceId({ groupBy: ['SERVICE'], filters: { RESOURCE_ID: ['i-1'] } })).toBe(true);
+    expect(usesResourceId({ groupBy: ['SERVICE'], filters: { RESOURCE_ID: [] } })).toBe(false);
+    expect(usesResourceId({ groupBy: ['SERVICE', 'REGION'] })).toBe(false);
+  });
+
+  it('builds a DAILY request with metrics, group-by and the usual filter translation', () => {
+    const req = buildResourceCostRequest({ ...rq, groupBy: ['RESOURCE_ID', 'TAG:team'], filters: { SERVICE: ['Amazon Simple Storage Service'] } }, 'AmortizedCost', TODAY)!;
+    expect(req.TimePeriod).toEqual({ Start: '2026-11-10', End: '2026-11-18' });
+    expect(req.Granularity).toBe('DAILY');
+    expect(req.Metrics).toEqual(['AmortizedCost', 'UsageQuantity']);
+    expect(req.GroupBy).toEqual([{ Type: 'DIMENSION', Key: 'RESOURCE_ID' }, { Type: 'TAG', Key: 'team' }]);
+    expect(req.Filter).toEqual({ And: [{ Dimensions: { Key: 'SERVICE', Values: ['Amazon Simple Storage Service'] } }, NO_CREDITS] });
+  });
+
+  it('translates a RESOURCE_ID filter', () => {
+    const req = buildResourceCostRequest({ ...rq, groupBy: ['USAGE_TYPE'], filters: { RESOURCE_ID: ['i-1', 'i-2'] } }, 'UnblendedCost', TODAY)!;
+    expect(req.Filter).toEqual({ And: [{ Dimensions: { Key: 'RESOURCE_ID', Values: ['i-1', 'i-2'] } }, NO_CREDITS] });
+  });
+
+  it('clamps the start to today-14 and makes no request for older periods', () => {
+    const today = '2026-11-18';
+    expect(buildResourceCostRequest({ ...rq, start: '2026-08-01', end: '2026-12-01' }, 'UnblendedCost', today)!.TimePeriod).toEqual({ Start: '2026-11-04', End: '2026-11-19' });
+    expect(buildResourceCostRequest({ ...rq, start: '2026-11-04' }, 'UnblendedCost', today)!.TimePeriod!.Start).toBe('2026-11-04');
+    expect(buildResourceCostRequest({ ...rq, start: '2026-10-01', end: '2026-11-04' }, 'UnblendedCost', today)).toBeNull();
+    expect(buildResourceCostRequest({ ...rq, start: '2026-10-01', end: '2026-11-05' }, 'UnblendedCost', today)!.TimePeriod).toEqual({ Start: '2026-11-04', End: '2026-11-05' });
+  });
+
+  it('issues MONTHLY queries as DAILY and always sends a Filter', () => {
+    const req = buildResourceCostRequest({ ...rq, granularity: 'MONTHLY' }, 'UnblendedCost', TODAY)!;
+    expect(req.Granularity).toBe('DAILY');
+    expect(req.Filter).toEqual(NO_CREDITS);
+    // nothing to filter on (credits included on purpose): a match-everything expression keeps the request valid
+    const open = buildResourceCostRequest({ ...rq, groupBy: ['RESOURCE_ID', 'RECORD_TYPE'] }, 'UnblendedCost', TODAY)!;
+    expect(open.Filter).toEqual(matchAllExpression());
+    expect(() => buildResourceCostRequest({ ...rq, groupBy: ['RESOURCE_ID', 'SERVICE', 'REGION'] }, 'UnblendedCost', TODAY)).toThrow(/two/);
+  });
+
+  it('buckets daily rows to the month start per key', () => {
+    const rows: CostRow[] = [
+      { keys: ['i-1'], date: '2026-10-30', cost: 1, usage: 2 },
+      { keys: ['i-1'], date: '2026-10-31', cost: 2, usage: 2 },
+      { keys: ['i-2'], date: '2026-10-31', cost: 5 },
+      { keys: ['i-1'], date: '2026-11-01', cost: 4, usage: 1 },
+      { keys: ['i-1'], date: '2026-11-02', cost: 8, usage: 1 },
+    ];
+    expect(bucketByMonth(rows)).toEqual([
+      { keys: ['i-1'], date: '2026-10-01', cost: 3, usage: 4 },
+      { keys: ['i-2'], date: '2026-10-01', cost: 5, usage: 0 },
+      { keys: ['i-1'], date: '2026-11-01', cost: 12, usage: 2 },
+    ]);
+    expect(rows[0].cost).toBe(1); // input untouched
+  });
+
+  it("returns '' for costs without a resource id", () => {
+    const rows = normalizeResourceKeys(
+      [
+        { keys: ['S3', 'NoResourceId'], date: 'd', cost: 1 },
+        { keys: ['S3', ''], date: 'd', cost: 1 },
+        { keys: ['S3', 'arn:aws:s3:::bucket'], date: 'd', cost: 1 },
+      ],
+      ['SERVICE', 'RESOURCE_ID'],
+    );
+    expect(rows.map((r) => r.keys[1])).toEqual(['', '', 'arn:aws:s3:::bucket']);
+    expect(normalizeResourceKeys([{ keys: ['NoResourceId'], date: 'd', cost: 1 }], ['SERVICE'])[0].keys).toEqual(['NoResourceId']);
+  });
+
+  it('explains the opt-in when resource-level data is not enabled; other errors keep their classification', () => {
+    const err = (name: string, message: string) => Object.assign(new Error(message), { name });
+    expect(RESOURCE_LEVEL_DISABLED_MESSAGE).toBe(
+      "Resource-level cost data is not enabled for this account. Turn on 'Resource-level data at daily granularity' in Billing → Cost Management preferences (free), wait up to 48 hours, then try again.",
+    );
+    expect(resourceCostError(err('DataUnavailableException', 'The requested data is unavailable.')).message).toBe(RESOURCE_LEVEL_DISABLED_MESSAGE);
+    expect(resourceCostError(err('AccessDeniedException', 'Resource level data is an opt-in only feature.')).message).toBe(RESOURCE_LEVEL_DISABLED_MESSAGE);
+    expect(resourceCostError(err('AccessDeniedException', 'User not enabled for resource level data access')).message).toBe(RESOURCE_LEVEL_DISABLED_MESSAGE);
+    expect(resourceCostError(err('AccessDeniedException', 'User: arn:aws:iam::1:user/x is not authorized to perform: ce:GetCostAndUsageWithResources on resource: *')).message).toBe(
+      'Access denied: ce:GetCostAndUsageWithResources',
+    );
+    expect(resourceCostError(err('ExpiredTokenException', 'The security token included in the request is expired')).message).toMatch(/Reconnect/);
+    expect(resourceCostError(err('ThrottlingException', 'Rate exceeded')).message).toMatch(/throttled/);
+    expect(resourceCostError(err('ValidationException', 'start date is too old')).message).toBe('ValidationException: start date is too old');
+  });
+});
+
+describe('member accounts', () => {
+  const accounts: AccountInfo[] = [
+    { id: '111111111111', name: 'management' },
+    { id: '222222222222', name: 'prod' },
+    { id: '333333333333', name: 'dev' },
+    { id: '444444444444', name: 'sandbox' },
+    { id: '555555555555', name: 'closed' },
+  ];
+  const day = (id: string, date: string, cost: number): CostRow => ({ keys: [id], date, cost });
+  const spend = [
+    day('111111111111', '2026-11-01', 900),
+    day('222222222222', '2026-11-01', 40),
+    day('222222222222', '2026-11-02', 60),
+    day('333333333333', '2026-11-01', 500),
+    day('444444444444', '2026-11-01', 0.99),
+    day('555555555555', '2026-09-01', 800), // before the window
+  ];
+
+  it('orders by recent spend, skips the caller, tiny and idle accounts', () => {
+    const picked = selectMemberAccounts(accounts, spend, '111111111111', '2026-10-19');
+    expect(picked).toEqual([
+      { id: '333333333333', name: 'dev', spend: 500 },
+      { id: '222222222222', name: 'prod', spend: 100 },
+    ]);
+  });
+
+  it('caps the number of accounts (40 by default), keeping the biggest spenders', () => {
+    const many: AccountInfo[] = Array.from({ length: 60 }, (_, i) => ({ id: String(100000000000 + i), name: `a${i}` }));
+    const rows = many.map((a, i) => day(a.id, '2026-11-01', 10 + i));
+    const picked = selectMemberAccounts(many, rows, '999999999999', '2026-10-19');
+    expect(picked).toHaveLength(40);
+    expect(picked[0].name).toBe('a59');
+    expect(picked.at(-1)!.name).toBe('a20');
+    expect(selectMemberAccounts(many, rows, '999999999999', '2026-10-19', { cap: 2 }).map((a) => a.name)).toEqual(['a59', 'a58']);
+  });
+
+  it('falls back to the ids in the cost rows when the account list is unavailable, ignoring non-account keys', () => {
+    const picked = selectMemberAccounts([], [...spend, day('NoLinkedAccount', '2026-11-01', 50)], '111111111111', '2026-10-19');
+    expect(picked.map((a) => a.id)).toEqual(['333333333333', '222222222222']);
+  });
+
+  it('builds role ARNs for the caller partition', () => {
+    expect(partitionOf('arn:aws:iam::1:user/x')).toBe('aws');
+    expect(partitionOf('arn:aws-us-gov:sts::1:assumed-role/a/b')).toBe('aws-us-gov');
+    expect(partitionOf('arn:aws-cn:iam::1:user/x')).toBe('aws-cn');
+    expect(partitionOf(undefined)).toBe('aws');
+    expect(memberRoleArn('aws', '222222222222', 'CloudPenniesReadOnly')).toBe('arn:aws:iam::222222222222:role/CloudPenniesReadOnly');
+    expect(memberRoleArn('aws-us-gov', '222222222222', 'R')).toBe('arn:aws-us-gov:iam::222222222222:role/R');
+    expect(stsRegion('aws-cn')).toBe('cn-north-1');
+    expect(normalizeRoleName('  /role/CloudPenniesReadOnly ')).toBe('CloudPenniesReadOnly');
+    expect(normalizeRoleName(undefined)).toBe('');
+    expect(isValidRoleName('CloudPenniesReadOnly')).toBe(true);
+    expect(isValidRoleName('ops/Audit_Role-1')).toBe(true);
+    expect(isValidRoleName('bad name')).toBe(false);
+    expect(isValidRoleName('arn:aws:iam::1:role/x')).toBe(false);
+    expect(isValidRoleName('x'.repeat(65))).toBe(false);
+  });
+
+  it('stamps every finding with its account', () => {
+    const f = emptyFindings();
+    f.logGroups.push({ name: 'g', region: 'r', storedBytes: 1, retentionDays: null });
+    f.dashboards.push({ name: 'd', region: 'r' });
+    f.volumes.push({ id: 'v', region: 'r', sizeGb: 1, type: 'gp3', attached: false });
+    f.addresses.push({ ip: '1.1.1.1', region: 'r', associated: false });
+    f.loadBalancers.push({ name: 'l', arn: 'a', region: 'r', type: 'network', targets: 0 });
+    f.stoppedInstances.push({ id: 'i', region: 'r', type: 't3.micro', ebsGb: 8 });
+    stampAccount(f, '222222222222');
+    for (const list of [f.logGroups, f.dashboards, f.volumes, f.addresses, f.loadBalancers, f.stoppedInstances]) {
+      expect(list.map((x: { account?: string }) => x.account)).toEqual(['222222222222']);
+    }
+  });
+
+  it('writes one warning for all assume-role failures, listing at most five ids', () => {
+    const w = assumeRoleWarning(['1', '2', '3', '4', '5', '6', '7'], 9, 'CloudPenniesReadOnly');
+    expect(w.section).toBe('member-accounts');
+    expect(w.message).toBe(
+      'Could not enter 7 of 9 member accounts (1, 2, 3, 4, 5, and 2 more), so their resources were not inspected. ' +
+        'Create the role "CloudPenniesReadOnly" in each member account, trusting the management account, and allow this user sts:AssumeRole on it — see docs/MEMBER_ROLE.md.',
+    );
+    expect(assumeRoleWarning(['222222222222'], 1, 'R').message).toMatch(/^Could not enter 1 of 1 member account \(222222222222\),/);
+    const info = membersNotInspectedWarning(3);
+    expect(info.section).toBe('member-accounts');
+    expect(info.message).toMatch(/^Resources in 3 member accounts were not inspected/);
+    expect(info.message).toMatch(/member role name in Settings/);
   });
 });
 
@@ -577,9 +769,29 @@ describe('other mappers', () => {
 describe('IAM policy', () => {
   it('docs/IAM_POLICY.json matches the exported policy', () => {
     const doc = JSON.parse(readFileSync(path.join(__dirname, '../docs/IAM_POLICY.json'), 'utf8'));
-    expect(doc).toEqual(JSON.parse(iamPolicyJson(true)));
-    expect(doc.Statement.map((s: { Sid: string }) => s.Sid)).toEqual(['CloudPenniesBilling', 'CloudPenniesResourceScan']);
+    expect(doc).toEqual(JSON.parse(iamPolicyJson(true, 'CloudPenniesReadOnly')));
+    expect(doc.Statement.map((s: { Sid: string }) => s.Sid)).toEqual(['CloudPenniesBilling', 'CloudPenniesResourceScan', 'CloudPenniesAssumeMemberRole']);
     expect(JSON.parse(iamPolicyJson(false)).Statement).toHaveLength(1);
+  });
+
+  it('includes the AssumeRole statement only for a non-empty member role name', () => {
+    expect(JSON.parse(iamPolicyJson(true)).Statement).toHaveLength(2);
+    expect(JSON.parse(iamPolicyJson(true, '')).Statement).toHaveLength(2);
+    expect(JSON.parse(iamPolicyJson(true, '   ')).Statement).toHaveLength(2);
+    const st = JSON.parse(iamPolicyJson(false, 'OrgAudit')).Statement;
+    expect(st).toHaveLength(2);
+    expect(st[1]).toEqual({ Sid: 'CloudPenniesAssumeMemberRole', Effect: 'Allow', Action: IAM_POLICY_ASSUME, Resource: 'arn:aws:iam::*:role/OrgAudit' });
+    expect(IAM_POLICY_ASSUME).toEqual(['sts:AssumeRole']);
+    expect(IAM_POLICY_BILLING).toContain('ce:GetCostAndUsageWithResources');
+  });
+
+  it('docs/member-role.yaml grants exactly the resource-scan actions and trusts only the management account', () => {
+    const yaml = readFileSync(path.join(__dirname, '../docs/member-role.yaml'), 'utf8');
+    const actions = [...yaml.matchAll(/^\s+- ([a-z0-9-]+:[A-Za-z]+)\s*$/gm)].map((m) => m[1]);
+    expect(actions).toEqual(IAM_POLICY_SCAN);
+    expect(yaml).toContain("AWS: !Sub 'arn:${AWS::Partition}:iam::${ManagementAccountId}:root'");
+    expect(yaml).toMatch(/RoleName:[\s\S]*?Default: CloudPenniesReadOnly/);
+    expect(yaml.match(/sts:AssumeRole/g)).toHaveLength(1);
   });
 
   it('covers every action named in collector warnings, and only read-only verbs', () => {

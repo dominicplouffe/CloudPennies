@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { shortService } from '../../core/catalog';
+import { investigationPrompt } from '../../core/investigate';
 import type { Anomaly } from '../../core/types';
 import { diffDays, fmtDate, money } from '../../core/util';
 import { Empty, Icon, PageHead } from '../bits';
 import { Legend, Segments, SERIES_COLORS, TimeChart } from '../charts';
-import { useStore } from '../store';
+import { saveTextFile, useStore } from '../store';
 
 const SEV = { high: { label: 'High impact', cls: 'crit' }, medium: { label: 'Medium impact', cls: 'warn' }, low: { label: 'Low impact', cls: '' } } as const;
 const KIND = { spike: 'Spike', shift: 'Step change', new: 'New spend' } as const;
@@ -109,6 +110,7 @@ function AnomalyCard({ a }: { a: Anomaly }) {
           <button className="btn sm" style={{ marginTop: 18 }} onClick={() => s.pullThread(a.causes.length === 1 ? { label: a.thread.label, filters: { ...a.thread.filters, USAGE_TYPE: [a.causes[0].key] }, groupBy: 'LINKED_ACCOUNT' } : a.thread)}>
             Pull the thread in {shortService(a.service)} <Icon name="arrow" size={13} />
           </button>
+          <Investigate a={a} />
         </div>
         <div>
           {a.series.length > 1 ? (
@@ -148,6 +150,53 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
           {sub}
         </div>
       )}
+    </div>
+  );
+}
+
+/** A read-only investigation brief for an AI coding agent with the AWS CLI */
+function Investigate({ a }: { a: Anomaly }) {
+  const s = useStore();
+  const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(false);
+  const prompt = investigationPrompt(a, s.snapshot!);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setOpen(true); // clipboard unavailable: show it so it can be selected by hand
+    }
+  };
+  return (
+    <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+      <div style={{ fontWeight: 600, fontSize: 13 }}>Find the root cause with Claude Code</div>
+      <p className="ink2" style={{ fontSize: 12.5, marginTop: 2 }}>
+        A ready-made investigation brief for this anomaly. It is diagnosis only: the prompt forbids every create, update and delete, and asks for a report with the commands it ran.
+      </p>
+      <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button className="btn sm primary" onClick={() => void copy()}>
+          <Icon name={copied ? 'check' : 'copy'} size={13} /> {copied ? 'Copied' : 'Copy investigation prompt'}
+        </button>
+        <button className="btn sm ghost" onClick={() => setOpen(!open)}>
+          {open ? 'Hide' : 'Preview'}
+        </button>
+        <button className="btn sm ghost" onClick={() => void saveTextFile(`investigate-${a.service.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${a.start}.md`, prompt)}>
+          <Icon name="download" size={13} /> Save
+        </button>
+      </div>
+      {open && (
+        <pre className="policy" style={{ marginTop: 10, maxHeight: 320, whiteSpace: 'pre-wrap' }}>
+          {prompt}
+        </pre>
+      )}
+      <div className="note" style={{ marginTop: 10, fontSize: 12 }}>
+        <Icon name="shield" size={15} />
+        <span>
+          A prompt is an instruction, not a lock. Give the agent credentials that <b>cannot</b> write — a role with the AWS-managed <code>ReadOnlyAccess</code> policy — so "never change anything" is enforced by AWS, not just requested.
+        </span>
+      </div>
     </div>
   );
 }

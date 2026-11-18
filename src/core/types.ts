@@ -25,7 +25,7 @@ export type Dim =
   | 'RECORD_TYPE'
   | `TAG:${string}`;
 
-export type CostBasis = 'UnblendedCost' | 'AmortizedCost' | 'NetAmortizedCost';
+export type CostBasis = 'UnblendedCost' | 'NetUnblendedCost' | 'AmortizedCost' | 'NetAmortizedCost';
 
 export interface CostQuery {
   /** inclusive ISO date (YYYY-MM-DD) */
@@ -482,6 +482,10 @@ export interface Briefing {
   projectedLow?: number;
   projectedHigh?: number;
   projectionSource: 'aws' | 'run-rate';
+  /** projected - mtd: what is still expected between now and month end */
+  projectedRemaining: number;
+  /** set when AWS's forecast was discarded for disagreeing wildly with the recent daily run rate */
+  forecastRejected?: { awsRemaining: number; runRateRemaining: number };
   dailyAvg7: number;
   dailyAvgPrev7: number;
   /** total of last 30 days */

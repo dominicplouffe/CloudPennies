@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { shortService } from '../../core/catalog';
+import { BASIS_LABEL, shortService } from '../../core/catalog';
 import { reportMarkdown } from '../../core/exportReport';
 import { addDays, addMonths, daysInMonth, diffDays, fmtDateLong, money, monthStart, pct, pctChange } from '../../core/util';
 import { CATEGORY, Delta, Icon } from '../bits';
@@ -67,6 +67,9 @@ export function Briefing() {
           <div className="value">{money(b.projected)}</div>
           <div className="foot">
             <Delta cur={b.projected} prev={b.prevMonthTotal} /> vs {b.prevMonthLabel} ({money(b.prevMonthTotal, { compact: true })})
+          </div>
+          <div className="foot muted" style={{ marginTop: 2 }} title={b.forecastRejected ? `AWS's forecast for the rest of the month (${money(b.forecastRejected.awsRemaining)}) was far from the recent daily run rate (${money(b.forecastRejected.runRateRemaining)}), so the run rate is used instead.` : undefined}>
+            {money(b.mtd, { compact: true })} so far + {money(b.projectedRemaining, { compact: true })} {b.projectionSource === 'aws' ? 'AWS forecast' : 'at current daily rate'}
           </div>
         </div>
         <button className="card tile" onClick={() => s.setPage('savings')}>
@@ -295,7 +298,7 @@ export function Briefing() {
         </div>
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: 36 }}>
-        {snap.meta.mode === 'demo' ? 'Demo data for a fictional company.' : `Scanned ${new Date(snap.meta.generatedAt).toLocaleString()} · ${snap.meta.ceRequests} Cost Explorer requests (${money(snap.meta.ceRequests * 0.01, { cents: true })}).`} Costs are {snap.meta.costBasis === 'UnblendedCost' ? 'unblended' : 'amortized'}, before credits and refunds. Latest day may still be settling.
+        {snap.meta.mode === 'demo' ? 'Demo data for a fictional company.' : `Scanned ${new Date(snap.meta.generatedAt).toLocaleString()} · ${snap.meta.ceRequests} Cost Explorer requests (${money(snap.meta.ceRequests * 0.01, { cents: true })}).`} Costs are {BASIS_LABEL[snap.meta.costBasis] ?? 'unblended'}, before credits and refunds. Latest day may still be settling.
       </p>
     </>
   );

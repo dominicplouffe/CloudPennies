@@ -93,11 +93,12 @@ export function SettingsPage() {
         <h2>Analysis</h2>
       </div>
       <div className="card rows">
-        <Row title="Cost basis" desc="Unblended is what appears on the invoice each day. Amortized spreads upfront commitment fees across the days they cover — better for trends if you buy upfront Savings Plans or reservations. Takes effect on the next scan.">
+        <Row title="Cost basis" desc="Unblended is what appears on the invoice each day. Net unblended is the same after negotiated discounts (EDP, private pricing) — choose it if that is what your Cost Explorer shows. Amortized spreads upfront commitment fees across the days they cover — better for trends if you buy upfront Savings Plans or reservations. Takes effect on the next scan.">
           <div className="seg">
             {(
               [
                 ['UnblendedCost', 'Unblended'],
+                ['NetUnblendedCost', 'Net unblended'],
                 ['AmortizedCost', 'Amortized'],
                 ['NetAmortizedCost', 'Net amortized'],
               ] as const

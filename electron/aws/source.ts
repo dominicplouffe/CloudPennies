@@ -119,8 +119,9 @@ const RI_SERVICES: { cost: string; rec?: string; label: string }[] = [
 /** DynamoDB reserved capacity has no utilization/coverage report in Cost Explorer */
 const RI_UTILIZATION_SERVICES = RI_SERVICES.filter((s) => s.label !== 'DynamoDB');
 
-const FORECAST_METRIC: Record<CostBasis, 'UNBLENDED_COST' | 'AMORTIZED_COST' | 'NET_AMORTIZED_COST'> = {
+const FORECAST_METRIC: Record<CostBasis, 'UNBLENDED_COST' | 'NET_UNBLENDED_COST' | 'AMORTIZED_COST' | 'NET_AMORTIZED_COST'> = {
   UnblendedCost: 'UNBLENDED_COST',
+  NetUnblendedCost: 'NET_UNBLENDED_COST',
   AmortizedCost: 'AMORTIZED_COST',
   NetAmortizedCost: 'NET_AMORTIZED_COST',
 };
@@ -293,14 +294,20 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
             new GetCostForecastCommand({
               TimePeriod: { Start: today, End: end },
               Metric: FORECAST_METRIC[costBasis],
-              Granularity: 'MONTHLY',
+              // DAILY, not MONTHLY: a monthly forecast for a month already in progress is ambiguous
+              // (is the figure the rest of the month, or the whole month?). Summing days from
+              // today to month-end can only mean "what is still to come".
+              Granularity: 'DAILY',
               PredictionIntervalLevel: 80,
               Filter: excludeCreditsExpression(),
             }),
           );
-          if (r.Total?.Amount === undefined) return null;
-          const f: Forecast = { remaining: num(r.Total.Amount) };
-          const periods = r.ForecastResultsByTime ?? [];
+          const periods = (r.ForecastResultsByTime ?? []).filter((p) => {
+            const d = p.TimePeriod?.Start?.slice(0, 10);
+            return !d || (d >= today && d < end);
+          });
+          if (!periods.length && r.Total?.Amount === undefined) return null;
+          const f: Forecast = { remaining: periods.length ? periods.reduce((a, p) => a + num(p.MeanValue), 0) : num(r.Total?.Amount) };
           if (periods.length && periods.every((p) => p.PredictionIntervalLowerBound !== undefined && p.PredictionIntervalUpperBound !== undefined)) {
             f.remainingLow = periods.reduce((a, p) => a + num(p.PredictionIntervalLowerBound), 0);
             f.remainingHigh = periods.reduce((a, p) => a + num(p.PredictionIntervalUpperBound), 0);

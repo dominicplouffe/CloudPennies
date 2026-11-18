@@ -167,13 +167,20 @@ export function buildBriefing(ctx: Ctx, anomalies: Anomaly[], insights: Insight[
   let projectedLow: number | undefined;
   let projectedHigh: number | undefined;
   let projectionSource: Briefing['projectionSource'] = 'run-rate';
-  if (snap.forecast && remainingDays > 0) {
+  const runRateRemaining = dailyRun * remainingDays;
+  // Trust AWS's forecast only when it is in the same universe as what the account actually
+  // spends per day. A forecast more than double (or under 40% of) the run rate is not a
+  // forecast of the remaining days — showing it would be worse than showing the run rate.
+  const awsRemaining = snap.forecast?.remaining;
+  const plausible = awsRemaining !== undefined && (runRateRemaining <= 0 || (awsRemaining <= runRateRemaining * 2 && awsRemaining >= runRateRemaining * 0.4));
+  const forecastRejected = awsRemaining !== undefined && remainingDays > 0 && !plausible ? { awsRemaining, runRateRemaining } : undefined;
+  if (snap.forecast && remainingDays > 0 && plausible) {
     projected = mtd + snap.forecast.remaining;
     projectedLow = snap.forecast.remainingLow !== undefined ? mtd + snap.forecast.remainingLow : undefined;
     projectedHigh = snap.forecast.remainingHigh !== undefined ? mtd + snap.forecast.remainingHigh : undefined;
     projectionSource = 'aws';
   } else {
-    projected = mtd + dailyRun * remainingDays;
+    projected = mtd + runRateRemaining;
   }
 
   // What are we comparing? Early in the month MTD is too thin, so use trailing 30 days.
@@ -281,6 +288,8 @@ export function buildBriefing(ctx: Ctx, anomalies: Anomaly[], insights: Insight[
     projectedLow,
     projectedHigh,
     projectionSource,
+    projectedRemaining: projected - mtd,
+    forecastRejected,
     dailyAvg7: sum(last7) / Math.max(1, last7.length),
     dailyAvgPrev7: sum(prev7) / Math.max(1, prev7.length),
     last30: ctx.last30,

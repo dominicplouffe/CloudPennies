@@ -320,3 +320,10 @@ export function dimLabel(dim: string): string {
   if (dim.startsWith('TAG:')) return `Tag: ${dim.slice(4)}`;
   return DIM_LABEL[dim] ?? dim;
 }
+
+export const BASIS_LABEL: Record<string, string> = {
+  UnblendedCost: 'unblended',
+  NetUnblendedCost: 'net unblended',
+  AmortizedCost: 'amortized',
+  NetAmortizedCost: 'net amortized',
+};

@@ -1,5 +1,5 @@
 import type { Report, Snapshot } from './types';
-import { shortService } from './catalog';
+import { BASIS_LABEL, shortService } from './catalog';
 import { fmtDateLong, money, pct } from './util';
 
 /** A shareable Markdown summary of the current report — paste into Slack, email or a ticket. */
@@ -7,7 +7,7 @@ export function reportMarkdown(snap: Snapshot, r: Report): string {
   const b = r.briefing;
   const L: string[] = [];
   L.push(`# CloudPennies briefing — ${snap.meta.accountLabel}`);
-  L.push(`_Data through ${fmtDateLong(snap.meta.dataThrough)} · ${snap.meta.costBasis === 'UnblendedCost' ? 'unblended' : 'amortized'} cost, credits and refunds excluded_`);
+  L.push(`_Data through ${fmtDateLong(snap.meta.dataThrough)} · ${BASIS_LABEL[snap.meta.costBasis] ?? 'unblended'} cost, credits and refunds excluded_`);
   L.push('', `## ${b.headline}`, '', ...b.story.flatMap((p) => [p, '']));
   L.push('| | |', '|---|---|');
   L.push(`| Month to date | ${money(b.mtd)} |`);

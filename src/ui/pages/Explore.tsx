@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { REGION_NAMES, describeUsage, dimLabel, shortService, stripRegion } from '../../core/catalog';
 import type { CostRow, Dim } from '../../core/types';
-import { addDays, addMonths, dateRange, daysInMonth, diffDays, money, monthStart, pct } from '../../core/util';
+import { addDays, addMonths, dateRange, daysInMonth, diffDays, fmtDateLong, money, monthStart, pct } from '../../core/util';
 import { Delta, Icon, PageHead } from '../bits';
 import { Legend, OTHER_COLOR, SERIES_COLORS, Spark, TimeChart } from '../charts';
 import { saveTextFile, useStore, type Period } from '../store';
@@ -48,8 +48,17 @@ export function Explore() {
   const { filters, groupBy, period } = s.explore;
   const today = snap.meta.today;
   const byResource = groupBy === 'RESOURCE_ID' || !!filters.RESOURCE_ID;
-  // resource-level cost only exists for the last 14 days
-  const range = useMemo(() => (byResource ? { start: addDays(today, -14), end: today, prevStart: null, monthly: false } : periodRange(period, today)), [period, today, byResource]);
+  // Resource-level cost: the imported Cost and Usage Report covers whole months; without it,
+  // Cost Explorer only has the last 14 days.
+  const curFrom = snap.meta.cur?.months.length ? [...snap.meta.cur.months].sort((a, b) => a.month.localeCompare(b.month))[0].month + '-01' : null;
+  const range = useMemo(() => {
+    if (!byResource) return periodRange(period, today);
+    if (!curFrom) return { start: addDays(today, -14), end: today, prevStart: null, monthly: false };
+    const r = periodRange(period, today);
+    const start = r.start < curFrom ? curFrom : r.start;
+    return { start, end: r.end, prevStart: null, monthly: r.monthly };
+  }, [period, today, byResource, curFrom]);
+  const lockPeriod = byResource && !curFrom;
   const [rows, setRows] = useState<CostRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +110,7 @@ export function Explore() {
     if (groupBy === 'REGION') return { label: REGION_NAMES[key] ?? (key || 'No region'), sub: REGION_NAMES[key] ? key : undefined };
     if (groupBy.startsWith('TAG:')) return { label: key || '(untagged)' };
     if (groupBy === 'RESOURCE_ID') {
+      if (key === '(other resources)') return { label: 'Other resources', sub: 'many small resources, grouped' };
       if (!key) return { label: 'Not tied to a resource', sub: 'fees, taxes, usage AWS does not attribute' };
       const short = key.includes(':') ? key.split(':').slice(5).join(':') || key : key;
       return { label: short, sub: short === key ? undefined : key };
@@ -190,7 +200,7 @@ export function Explore() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '22px 0 12px' }}>
         <div className="seg">
           {PERIODS.map((p) => (
-            <button key={p.id} disabled={byResource} style={byResource ? { opacity: 0.45 } : undefined} className={!byResource && period === p.id ? 'on' : ''} onClick={() => s.setExplore({ ...s.explore, period: p.id })}>
+            <button key={p.id} disabled={lockPeriod} style={lockPeriod ? { opacity: 0.45 } : undefined} className={!lockPeriod && period === p.id ? 'on' : ''} onClick={() => s.setExplore({ ...s.explore, period: p.id })}>
               {p.label}
             </button>
           ))}
@@ -211,7 +221,18 @@ export function Explore() {
         <div className="note" style={{ marginBottom: 12 }}>
           <Icon name="info" size={16} />
           <span>
-            Cost by resource covers the <b>last 14 days</b> only — that is all AWS keeps at this level. {snap.meta.mode === 'live' ? 'Each view here is a paid Cost Explorer request ($0.01), cached for a few hours.' : ''}
+            {curFrom ? (
+              <>
+                Cost by resource comes from your Cost and Usage Report ({snap.meta.cur!.exportName}), imported from <b>{fmtDateLong(curFrom)}</b> onward. Small resources are grouped as "(other resources)".
+              </>
+            ) : (
+              <>
+                Cost by resource covers the <b>last 14 days</b> only — that is all Cost Explorer keeps at this level. {snap.meta.mode === 'live' ? 'Each view here is a paid request ($0.01), cached for a few hours. ' : ''}
+                <button className="link" onClick={() => s.setPage('settings')}>
+                  Import the Cost and Usage Report for full history
+                </button>
+              </>
+            )}
           </span>
         </div>
       )}

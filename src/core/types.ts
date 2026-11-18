@@ -84,6 +84,8 @@ export interface SnapshotMeta {
   deepScan: boolean;
   /** regions inspected by the resource-level scan */
   regionsScanned: string[];
+  /** resource-level cost history imported from a Cost and Usage Report, if any */
+  cur?: { exportName: string; months: CurMonth[] };
   /** account ids whose resources were inspected (the connected account plus member accounts reached by assuming a role) */
   accountsScanned?: string[];
   warnings: ScanWarning[];
@@ -573,6 +575,12 @@ export interface Settings {
   launchAtLogin: boolean;
   /** post a summary to Slack every Monday (needs a webhook, see Bridge.setSlackWebhook) */
   weeklyDigest: boolean;
+  /** import the Cost and Usage Report during scans for resource-level cost history */
+  curEnabled: boolean;
+  /** id of the export to read (CurExport.id); '' = pick the best usable one automatically */
+  curExportId: string;
+  /** how many months of report data to keep locally, including the current month */
+  curMonths: 1 | 3 | 6 | 12;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -586,6 +594,9 @@ export const DEFAULT_SETTINGS: Settings = {
   runInBackground: false,
   launchAtLogin: false,
   weeklyDigest: false,
+  curEnabled: true,
+  curExportId: '',
+  curMonths: 3,
 };
 
 export type CredentialInput =
@@ -633,10 +644,59 @@ export interface Bridge {
   hasSlackWebhook(): Promise<boolean>;
   /** send a test desktop notification and, if a webhook is set, a test Slack message. Returns an error string on failure. */
   testNotifications(): Promise<string | null>;
+  /** Cost and Usage Report exports found on the account and what has been imported. `refresh` re-lists exports from AWS. */
+  getCurStatus(refresh?: boolean): Promise<CurStatus>;
+  /** import (or update) report data now, outside a scan. Progress is reported through onScanProgress. */
+  importCur(): Promise<{ ok: true; status: CurStatus } | { ok: false; error: string }>;
   /** fired when the user clicks a desktop notification: open this page (and item) */
   onNavigate(cb: (target: { page: Alert['page']; focusId?: string }) => void): () => void;
   /** fired after a background (scheduled) scan replaced the cached snapshot */
   onSnapshotUpdated(cb: (snapshot: Snapshot) => void): () => void;
+}
+
+// ───────────────────────────── Cost and Usage Report ─────────────────────────────
+
+/** A Cost and Usage Report export definition found on the account */
+export interface CurExport {
+  /** stable id: export ARN (Data Exports / CUR 2.0) or `legacy:<report name>` */
+  id: string;
+  name: string;
+  kind: 'cur2' | 'legacy';
+  bucket: string;
+  prefix: string;
+  /** region of the S3 bucket */
+  region: string;
+  format: 'parquet' | 'csv';
+  /** whether the export includes resource ids (without them it adds nothing over Cost Explorer) */
+  hasResourceIds: boolean;
+  /** HOURLY | DAILY | MONTHLY */
+  granularity: string;
+  /** false when CloudPennies cannot use it; `reason` says why in plain language */
+  usable: boolean;
+  reason?: string;
+}
+
+/** One imported billing month */
+export interface CurMonth {
+  /** YYYY-MM */
+  month: string;
+  /** aggregated rows stored locally */
+  rows: number;
+  /** total cost of the month in the snapshot's cost basis, credits and refunds excluded — comparable to Cost Explorer */
+  cost: number;
+  ingestedAt: string;
+  /** false for the month still in progress */
+  complete: boolean;
+}
+
+export interface CurStatus {
+  exports: CurExport[];
+  /** id of the export in use, or null when none is usable */
+  selected: string | null;
+  months: CurMonth[];
+  /** why the last listing or import failed, in plain language */
+  lastError?: string;
+  missingPermission?: string;
 }
 
 // ───────────────────────────── History ─────────────────────────────

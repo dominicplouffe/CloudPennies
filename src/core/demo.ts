@@ -603,6 +603,19 @@ export function demoSnapshot(today = todayIso()): Snapshot {
       deepScan: true,
       regionsScanned: ['us-east-1', 'us-west-2', 'eu-west-1'],
       accountsScanned: ACCOUNTS.map((a) => a.id),
+      cur: {
+        exportName: 'acme-cur2-daily',
+        months: [2, 1, 0].map((back) => {
+          const m = addMonths(monthStart(today), -back);
+          return {
+            month: m.slice(0, 7),
+            rows: 41000 - back * 1700,
+            cost: sum(demoQuery(cube, { start: m, end: back === 0 ? today : addMonths(m, 1), granularity: 'MONTHLY', groupBy: [] }).rows.map((r) => r.cost)),
+            ingestedAt: new Date().toISOString(),
+            complete: back > 0,
+          };
+        }),
+      },
       warnings: [],
     },
     accounts: ACCOUNTS,

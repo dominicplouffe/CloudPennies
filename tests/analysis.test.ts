@@ -294,6 +294,15 @@ describe('reconciliation', () => {
     expect(isLastDayPartial(emptySnapshot(series('S', 'u', (ago) => 1000 * wobble(ago))))).toBe(false);
   });
 
+  it('compares the Cost and Usage Report with Cost Explorer month by month', () => {
+    const snap = demoSnapshot(TODAY);
+    const ok = reconcile(snap).checks.filter((c) => c.id.startsWith('cur-'));
+    expect(ok.length).toBe(2); // two complete months imported
+    expect(ok.every((c) => c.status === 'pass')).toBe(true);
+    snap.meta.cur!.months[1].cost *= 0.8;
+    expect(reconcile(snap).checks.filter((c) => c.id.startsWith('cur-') && c.status === 'warn')).toHaveLength(1);
+  });
+
   it('diagnostics carry totals but no account ids or resource names', () => {
     const snap = demoSnapshot(TODAY);
     const d = diagnostics(snap);

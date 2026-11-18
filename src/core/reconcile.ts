@@ -130,7 +130,22 @@ export function reconcile(snap: Snapshot): Reconciliation {
     });
   }
 
-  // 5. What the scan could not read
+  // 5. The Cost and Usage Report must tell the same story as Cost Explorer
+  for (const m of snap.meta.cur?.months.filter((x) => x.complete) ?? []) {
+    const ce = sum(snap.monthlyByService.filter((r) => r.date.slice(0, 7) === m.month).map((r) => r.cost));
+    if (ce <= 0) continue;
+    const close = Math.abs(m.cost - ce) <= Math.max(5, ce * 0.02);
+    checks.push({
+      id: 'cur-' + m.month,
+      label: `Cost and Usage Report matches Cost Explorer for ${monthName(m.month + '-01')}`,
+      status: close ? 'pass' : 'warn',
+      detail: close
+        ? `${money(m.cost)} in the report, ${money(ce)} in Cost Explorer.`
+        : `The report totals ${money(m.cost)} but Cost Explorer says ${money(ce)} (${pctOff(m.cost, ce)}). Resource-level figures for that month may be off; the export may cover fewer accounts or still be updating.`,
+    });
+  }
+
+  // 6. What the scan could not read
   if (snap.meta.warnings.length)
     checks.push({ id: 'warnings', label: 'Parts of the scan were skipped', status: 'info', detail: `${snap.meta.warnings.length} section${snap.meta.warnings.length === 1 ? '' : 's'} could not be read (${[...new Set(snap.meta.warnings.map((w) => w.section))].join(', ')}). Findings that depend on them are missing, but the cost figures are unaffected.` });
 

@@ -17,7 +17,7 @@ It is built for someone who owns an AWS bill and has ten minutes, not an afterno
 |---|---|
 | **Briefing** | "What happened to my bill, in four sentences?" Month-to-date, projected month-end, the services that moved and *which line item* moved them, and the three or four things to do first. Exports to Markdown for Slack or email. |
 | **Explore** | "Where exactly is this money going?" Click any row to drill down: service → usage type → account → region → tag. AWS's cryptic usage types (`USE1-NatGateway-Bytes`) are translated to English ("NAT Gateway data processing"). CSV export. |
-| **Anomalies** | "Did anything break pattern?" Spikes, silent step-ups that never came back down, and brand-new services — each with the dollar impact, a monthly run-rate if it continues, and the usage types responsible. |
+| **Anomalies** | "Did anything break pattern?" Spikes, silent step-ups that never came back down, and brand-new services — each with the dollar impact, a monthly run-rate if it continues, and the usage types responsible. Every anomaly also comes with a copy-paste **investigation prompt** for Claude Code: a strictly read-only brief (anomaly facts, ready-to-run Cost Explorer commands, service-specific steps) for finding the root cause. |
 | **Savings** | "What can I cut?" A ranked list with a dollar figure, effort, risk, and how firm the estimate is. Each item expands into the evidence, the exact resources, and the steps to fix it. |
 | **Commitments** | "What should I reserve right now, and what is about to expire?" Effective savings rate, coverage, utilization, a 12-month renewal calendar with the discount at risk, and AWS's purchase recommendations with cautious buying advice. |
 

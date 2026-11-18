@@ -3,6 +3,7 @@ import { analyze } from '../src/core/analysis';
 import { describeUsage, instanceFamily, shortService, stripRegion } from '../src/core/catalog';
 import { demoQuery, buildCube, demoSnapshot } from '../src/core/demo';
 import { reportMarkdown } from '../src/core/exportReport';
+import { investigationPrompt } from '../src/core/investigate';
 import type { CostRow, Snapshot } from '../src/core/types';
 import { addDays, dateRange, sum } from '../src/core/util';
 
@@ -208,5 +209,48 @@ describe('demo account', () => {
     const first = analyze(demoSnapshot('2026-12-01'));
     expect(first.briefing.monthLabel).toBe('November');
     expect(first.briefing.mtd).toBeGreaterThan(50000);
+  });
+});
+
+describe('investigation prompt', () => {
+  const snap = demoSnapshot(TODAY);
+  const r = analyze(snap);
+  const prompts = r.anomalies.map((a) => ({ a, p: investigationPrompt(a, snap) }));
+
+  it('is generated for every anomaly and states the read-only rules up front', () => {
+    expect(prompts.length).toBeGreaterThan(3);
+    for (const { p } of prompts) {
+      expect(p).toContain('**This is a read-only investigation.**');
+      expect(p).toContain('**Never change anything.**');
+      expect(p).toContain('**Do not fix the problem**');
+      expect(p.indexOf('## Hard rules')).toBeLessThan(p.indexOf('## The anomaly'));
+      expect(p).toContain('aws sts get-caller-identity');
+      expect(p).toContain('**Commands run**');
+    }
+  });
+
+  it('never tells the agent to run a mutating AWS command', () => {
+    const MUTATING = /^(create|put|update|modify|delete|remove|terminate|stop|start|reboot|run|attach|detach|associate|disassociate|tag|untag|set|enable|disable|register|deregister|invoke|send|publish|purchase|cancel|restore|copy|import|apply|execute)(-|$)/;
+    for (const { p } of prompts) {
+      // everything outside the "Hard rules" section (which names forbidden verbs in order to forbid them)
+      const body = p.slice(p.indexOf('## The anomaly'));
+      for (const m of body.matchAll(/aws\s+([a-z0-9-]+)\s+([a-z0-9-]+)/g)) {
+        expect(MUTATING.test(m[2]), `suggested command: aws ${m[1]} ${m[2]}`).toBe(false);
+      }
+    }
+  });
+
+  it('carries the facts of the anomaly and service-specific steps', () => {
+    const logs = prompts.find(({ a }) => /Log ingestion/.test(a.title))!;
+    expect(logs.p).toContain('DataProcessing-Bytes');
+    expect(logs.p).toContain('IncomingBytes');
+    expect(logs.p).toContain(logs.a.start);
+    expect(logs.p).toContain('"Key":"SERVICE","Values":["AmazonCloudWatch"]');
+    const nat = prompts.find(({ a }) => /NAT Gateway/.test(a.title))!;
+    expect(nat.p).toContain('describe-nat-gateways');
+    const bedrock = prompts.find(({ a }) => /Bedrock/.test(a.title))!;
+    expect(bedrock.p).toContain('ModelId');
+    const ext = prompts.find(({ a }) => /Extended Support/.test(a.title) && /Relational/.test(a.service))!;
+    expect(ext.p).toContain('describe-db-instances');
   });
 });

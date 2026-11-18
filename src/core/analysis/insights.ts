@@ -366,7 +366,7 @@ export function buildInsights(ctx: Ctx, anomalies: Anomaly[], commitments: Commi
       service: svcOf(idleIp.leaves),
       source: idleAddrs.length ? 'Resource scan' : 'CloudPennies',
       evidence: [{ label: 'Idle address cost, last 30 days', value: money(cost) }],
-      resources: idleAddrs.slice(0, 30).map((a) => ({ id: a.ip, detail: `${a.region}${a.allocationId ? ` · ${a.allocationId}` : ''}`, monthlySavings: 0.005 * HOURS })),
+      resources: idleAddrs.slice(0, 30).map((a) => ({ id: a.ip, detail: [a.region, a.allocationId, accountName(ctx, a.account)].filter(Boolean).join(' · '), monthlySavings: 0.005 * HOURS })),
       steps: ['EC2 console → Elastic IPs → filter "Associated instance ID: –".', 'Release each address you no longer need (make sure no DNS record or allow-list still points at it).'],
       thread: idleIp.leaves.length ? thread('Idle IPv4', svcOf(idleIp.leaves), utOf(idleIp.leaves)) : undefined,
     });
@@ -391,7 +391,7 @@ export function buildInsights(ctx: Ctx, anomalies: Anomaly[], commitments: Commi
         { label: 'gp2 storage', value: `${Math.round(gp2.usage).toLocaleString()} GB-months` },
         { label: 'gp2 spend, last 30 days', value: money(gp2.cost) },
       ],
-      resources: gp2Vols.sort((a, b) => b.sizeGb - a.sizeGb).slice(0, 25).map((v) => ({ id: v.name ? `${v.name} (${v.id})` : v.id, detail: `${v.sizeGb} GB · ${v.region}`, monthlySavings: v.sizeGb * 0.02 })),
+      resources: gp2Vols.sort((a, b) => b.sizeGb - a.sizeGb).slice(0, 25).map((v) => ({ id: v.name ? `${v.name} (${v.id})` : v.id, detail: [`${v.sizeGb} GB`, v.region, accountName(ctx, v.account)].filter(Boolean).join(' · '), monthlySavings: v.sizeGb * 0.02 })),
       steps: ['`aws ec2 modify-volume --volume-id <id> --volume-type gp3` — or select volumes in the console and choose Modify.', 'Volumes over 1 TB: set gp3 IOPS to 3 × size in GB (up to 16,000) to match gp2.'],
       thread: thread('gp2 volumes', svcOf(gp2.leaves), utOf(gp2.leaves)),
     });
@@ -413,7 +413,7 @@ export function buildInsights(ctx: Ctx, anomalies: Anomaly[], commitments: Commi
       service: 'EC2 - Other',
       source: 'Resource scan',
       evidence: [{ label: 'Unattached storage', value: `${sum(unattached.map((v) => v.sizeGb)).toLocaleString()} GB` }],
-      resources: unattached.sort((a, b) => cost(b) - cost(a)).slice(0, 30).map((v) => ({ id: v.name ? `${v.name} (${v.id})` : v.id, detail: `${v.sizeGb} GB ${v.type} · ${v.region}${v.createdAt ? ` · created ${fmtDateLong(v.createdAt)}` : ''}`, monthlySavings: cost(v) })),
+      resources: unattached.sort((a, b) => cost(b) - cost(a)).slice(0, 30).map((v) => ({ id: v.name ? `${v.name} (${v.id})` : v.id, detail: [`${v.sizeGb} GB ${v.type}`, v.region, accountName(ctx, v.account), v.createdAt ? `created ${fmtDateLong(v.createdAt)}` : ''].filter(Boolean).join(' · '), monthlySavings: cost(v) })),
       steps: ['Snapshot any volume you are unsure about (snapshots cost about half as much and only store used blocks).', 'Delete the volume.'],
       thread: thread('EBS storage', 'EC2 - Other', undefined),
     });
@@ -498,7 +498,7 @@ export function buildInsights(ctx: Ctx, anomalies: Anomaly[], commitments: Commi
           { label: 'Storage cost of those groups', value: `${money(cost)}/month` },
           { label: 'Savings estimate', value: 'Assumes a 90-day retention removes ~70% of stored data' },
         ],
-        resources: neverExpire.sort((a, b) => b.storedBytes - a.storedBytes).slice(0, 30).map((g) => ({ id: g.name, detail: `${bytes(g.storedBytes)} · ${g.region}`, monthlySavings: (g.storedBytes / 1024 ** 3) * 0.03 * 0.7 })),
+        resources: neverExpire.sort((a, b) => b.storedBytes - a.storedBytes).slice(0, 30).map((g) => ({ id: g.name, detail: [bytes(g.storedBytes), g.region, accountName(ctx, g.account)].filter(Boolean).join(' · '), monthlySavings: (g.storedBytes / 1024 ** 3) * 0.03 * 0.7 })),
         steps: ['Pick a retention period per group (30–90 days suits most application logs; export to S3 first if you need an archive).', '`aws logs put-retention-policy --log-group-name <name> --retention-in-days 90`', 'Set a default in your infrastructure templates so new log groups never start as "Never expire".'],
         thread: logStore.leaves.length ? thread('Log storage', svcOf(logStore.leaves), utOf(logStore.leaves)) : undefined,
       });
@@ -546,7 +546,7 @@ export function buildInsights(ctx: Ctx, anomalies: Anomaly[], commitments: Commi
           { label: 'Dashboards', value: `${res.dashboards.length} total, ${unused.length} unviewed` },
           { label: 'How we know', value: 'No GetDashboard events in CloudTrail over the last 90 days' },
         ],
-        resources: unused.slice(0, 40).map((d) => ({ id: d.name, detail: `${d.region}${d.lastModified ? ` · last edited ${fmtDateLong(d.lastModified)}` : ''}`, monthlySavings: 3 })),
+        resources: unused.slice(0, 40).map((d) => ({ id: d.name, detail: [d.region, accountName(ctx, d.account), d.lastModified ? `last edited ${fmtDateLong(d.lastModified)}` : ''].filter(Boolean).join(' · '), monthlySavings: 3 })),
         steps: ['Delete dashboards that belonged to finished projects, incidents and experiments.', 'While you are there, check whether the custom metrics and alarms that fed them are still needed — those usually cost far more than the dashboard.'],
         thread: dashCost.leaves.length ? thread('Dashboards', svcOf(dashCost.leaves), utOf(dashCost.leaves)) : undefined,
       });
@@ -772,7 +772,7 @@ export function buildInsights(ctx: Ctx, anomalies: Anomaly[], commitments: Commi
       service: 'Amazon Elastic Load Balancing',
       source: 'Resource scan',
       evidence: [{ label: 'Load balancers with zero registered targets', value: String(idleLbs.length) }],
-      resources: idleLbs.slice(0, 30).map((l) => ({ id: l.name, detail: `${l.type} · ${l.region}${l.createdAt ? ` · created ${fmtDateLong(l.createdAt)}` : ''}`, monthlySavings: 0.0225 * HOURS + 2 * 0.005 * HOURS })),
+      resources: idleLbs.slice(0, 30).map((l) => ({ id: l.name, detail: [l.type, l.region, accountName(ctx, l.account), l.createdAt ? `created ${fmtDateLong(l.createdAt)}` : ''].filter(Boolean).join(' · '), monthlySavings: 0.0225 * HOURS + 2 * 0.005 * HOURS })),
       steps: ['Check DNS: make sure no record still points at the load balancer.', 'Delete it, along with its empty target groups.'],
       thread: thread('Load Balancing', 'Amazon Elastic Load Balancing'),
     });

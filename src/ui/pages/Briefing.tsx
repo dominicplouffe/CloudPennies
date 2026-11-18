@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { BASIS_LABEL, shortService } from '../../core/catalog';
 import { reportMarkdown } from '../../core/exportReport';
+import { reconcile } from '../../core/reconcile';
 import { addDays, addMonths, daysInMonth, diffDays, fmtDateLong, money, monthStart, pct, pctChange } from '../../core/util';
 import { CATEGORY, Delta, Icon } from '../bits';
 import { Meter, TimeChart } from '../charts';
@@ -12,6 +13,7 @@ export function Briefing() {
   const r = s.report!;
   const b = r.briefing;
   const [range, setRange] = useState<'90d' | '13m'>('90d');
+  const failedChecks = useMemo(() => reconcile(snap).checks.filter((c) => c.status === 'fail').length, [snap]);
 
   const active = r.insights.filter((i) => !s.dismissed.has(i.id));
   const savings = active.reduce((a, i) => a + i.monthlySavings, 0);
@@ -33,20 +35,31 @@ export function Briefing() {
   const monthDates = b.monthlyTotals.map((m) => m.date);
   const monthVals = b.monthlyTotals.map((m) => (m.partial ? b.projected : m.cost));
 
-  const focus = monthStart(snap.meta.dataThrough);
-  const dayN = diffDays(snap.meta.dataThrough, focus) + 1;
+  const focus = monthStart(b.dataThrough);
+  const dayN = diffDays(b.dataThrough, focus) + 1;
   const dim = daysInMonth(focus);
 
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 24 }}>
         <div className="eyebrow">
-          Briefing · {fmtDateLong(snap.meta.dataThrough)} · day {dayN} of {dim}
+          Briefing · {fmtDateLong(b.dataThrough)} · day {dayN} of {dim}
         </div>
         <button className="btn sm ghost" onClick={() => void saveTextFile(`cloudpennies-briefing-${snap.meta.dataThrough}.md`, reportMarkdown(snap, r))}>
           <Icon name="download" size={14} /> Export
         </button>
       </div>
+      {failedChecks > 0 && (
+        <div className="note err" style={{ marginTop: 12 }}>
+          <Icon name="alert" size={16} />
+          <span>
+            <b>The numbers on this page did not pass a consistency check.</b> Treat them with caution.{' '}
+            <button className="link" onClick={() => s.setPage('settings')}>
+              See the data check
+            </button>
+          </span>
+        </div>
+      )}
       <h1 className="headline">{b.headline}</h1>
       <div className="story">
         {b.story.map((p, i) => (

@@ -278,6 +278,7 @@ export function buildBriefing(ctx: Ctx, anomalies: Anomaly[], insights: Insight[
   }
 
   return {
+    dataThrough: through,
     monthLabel: m,
     prevMonthLabel: monthName(prevMonth),
     mtd,

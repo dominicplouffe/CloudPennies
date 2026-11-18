@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CloudPennies read-only role for member accounts. Lets the management (payer) account
+  look for idle and forgotten resources in this account. Deploy as a StackSet.
+
+Parameters:
+  ManagementAccountId:
+    Type: String
+    Description: 12-digit id of the management (payer) account that CloudPennies is connected to.
+    AllowedPattern: '^[0-9]{12}$'
+    ConstraintDescription: must be a 12-digit AWS account id
+  RoleName:
+    Type: String
+    Description: Name of the role. Enter the same name in CloudPennies under Settings.
+    Default: CloudPenniesReadOnly
+    AllowedPattern: '^[A-Za-z0-9+=,.@_-]{1,64}$'
+
+Resources:
+  CloudPenniesReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Read-only resource scan by CloudPennies from the management account
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${ManagementAccountId}:root'
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudPenniesResourceScan
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudPenniesResourceScan
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - cloudwatch:ListDashboards
+                  - cloudwatch:DescribeAlarms
+                  - cloudtrail:LookupEvents
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeInstances
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
+                Resource: '*'
+
+Outputs:
+  RoleArn:
+    Description: ARN of the read-only role CloudPennies assumes
+    Value: !GetAtt CloudPenniesReadOnlyRole.Arn

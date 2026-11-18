@@ -23,6 +23,8 @@ export type Dim =
   | 'PURCHASE_TYPE'
   | 'INSTANCE_TYPE'
   | 'RECORD_TYPE'
+  /** individual resource (ARN or id). Live data needs resource-level data enabled in Cost Explorer and only covers the last 14 days. */
+  | 'RESOURCE_ID'
   | `TAG:${string}`;
 
 export type CostBasis = 'UnblendedCost' | 'NetUnblendedCost' | 'AmortizedCost' | 'NetAmortizedCost';
@@ -82,6 +84,8 @@ export interface SnapshotMeta {
   deepScan: boolean;
   /** regions inspected by the resource-level scan */
   regionsScanned: string[];
+  /** account ids whose resources were inspected (the connected account plus member accounts reached by assuming a role) */
+  accountsScanned?: string[];
   warnings: ScanWarning[];
 }
 
@@ -275,6 +279,8 @@ export interface HubRec {
 // ── Optional resource-level scan ──
 
 export interface LogGroupInfo {
+  /** owning account id, when known */
+  account?: string;
   name: string;
   region: string;
   storedBytes: number;
@@ -286,6 +292,7 @@ export interface LogGroupInfo {
 }
 
 export interface DashboardInfo {
+  account?: string;
   name: string;
   region: string;
   lastModified?: string;
@@ -294,6 +301,7 @@ export interface DashboardInfo {
 }
 
 export interface VolumeInfo {
+  account?: string;
   id: string;
   region: string;
   sizeGb: number;
@@ -305,6 +313,7 @@ export interface VolumeInfo {
 }
 
 export interface AddressInfo {
+  account?: string;
   ip: string;
   region: string;
   allocationId?: string;
@@ -312,6 +321,7 @@ export interface AddressInfo {
 }
 
 export interface LoadBalancerInfo {
+  account?: string;
   name: string;
   arn: string;
   region: string;
@@ -330,7 +340,7 @@ export interface ResourceFindings {
   oldSnapshots: { count: number; totalGb: number };
   addresses: AddressInfo[];
   loadBalancers: LoadBalancerInfo[];
-  stoppedInstances: { id: string; region: string; type: string; name?: string; stoppedSince?: string; ebsGb: number }[];
+  stoppedInstances: { account?: string; id: string; region: string; type: string; name?: string; stoppedSince?: string; ebsGb: number }[];
 }
 
 export interface Snapshot {
@@ -469,6 +479,8 @@ export interface Expiration {
 }
 
 export interface Briefing {
+  /** last day of cost data the analysis used (may be a day earlier than the snapshot's when that day was incomplete) */
+  dataThrough: string;
   monthLabel: string;
   prevMonthLabel: string;
   mtd: number;
@@ -546,6 +558,21 @@ export interface Settings {
   /** ignore anomalies with less total impact than this ($) */
   anomalyMinImpact: number;
   theme: 'system' | 'light' | 'dark';
+  /**
+   * Name of a read-only IAM role that exists in every member account (e.g. "CloudPenniesReadOnly").
+   * When set, the resource scan assumes arn:aws:iam::<member>:role/<name> in each linked account.
+   * '' = only scan the connected account.
+   */
+  memberRoleName: string;
+  /** rescan automatically while the app is running; 0 = never */
+  autoScanHours: 0 | 6 | 12 | 24;
+  /** show a desktop notification when a scan finds something new */
+  notifications: boolean;
+  /** keep running in the menu bar / system tray when the window is closed, so scheduled scans still happen */
+  runInBackground: boolean;
+  launchAtLogin: boolean;
+  /** post a summary to Slack every Monday (needs a webhook, see Bridge.setSlackWebhook) */
+  weeklyDigest: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -553,6 +580,12 @@ export const DEFAULT_SETTINGS: Settings = {
   deepScan: true,
   anomalyMinImpact: 25,
   theme: 'system',
+  memberRoleName: '',
+  autoScanHours: 24,
+  notifications: true,
+  runInBackground: false,
+  launchAtLogin: false,
+  weeklyDigest: false,
 };
 
 export type CredentialInput =
@@ -593,6 +626,48 @@ export interface Bridge {
   query(q: CostQuery): Promise<CostResult>;
   saveFile(defaultName: string, content: string): Promise<boolean>;
   openExternal(url: string): Promise<void>;
+  /** one entry per scan for the connected account, oldest first */
+  getHistory(): Promise<HistoryEntry[]>;
+  /** store (encrypted) or clear (null) a Slack incoming-webhook URL. The URL is never returned to the renderer. */
+  setSlackWebhook(url: string | null): Promise<{ ok: true } | { ok: false; error: string }>;
+  hasSlackWebhook(): Promise<boolean>;
+  /** send a test desktop notification and, if a webhook is set, a test Slack message. Returns an error string on failure. */
+  testNotifications(): Promise<string | null>;
+  /** fired when the user clicks a desktop notification: open this page (and item) */
+  onNavigate(cb: (target: { page: Alert['page']; focusId?: string }) => void): () => void;
+  /** fired after a background (scheduled) scan replaced the cached snapshot */
+  onSnapshotUpdated(cb: (snapshot: Snapshot) => void): () => void;
+}
+
+// ───────────────────────────── History ─────────────────────────────
+
+/** A compact record of one scan, kept forever (small) so progress can be tracked over time */
+export interface HistoryEntry {
+  /** ISO datetime of the scan */
+  at: string;
+  /** ISO date the scan considered "today" */
+  today: string;
+  last30: number;
+  mtd: number;
+  projected: number;
+  /** open opportunities at the time: id -> estimated monthly savings */
+  insights: Record<string, { title: string; savings: number; category: InsightCategory }>;
+  /** anomalies seen: id -> */
+  anomalies: Record<string, { title: string; ongoing: boolean; impact: number; start: string }>;
+  /** commitments with days left */
+  expirations: Record<string, { label: string; daysLeft: number; exposure: number }>;
+  esrPct: number;
+  coveragePct: number;
+}
+
+/** Something worth telling the user about after a scan */
+export interface Alert {
+  kind: 'anomaly' | 'expiry' | 'savings' | 'resolved';
+  title: string;
+  body: string;
+  /** page to open when the notification is clicked */
+  page: 'anomalies' | 'commitments' | 'savings' | 'briefing';
+  focusId?: string;
 }
 
 /** What the UI needs from a data source, live or demo */

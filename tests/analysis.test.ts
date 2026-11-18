@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/core/analysis';
 import { describeUsage, instanceFamily, shortService, stripRegion } from '../src/core/catalog';
-import { demoQuery, buildCube, demoSnapshot } from '../src/core/demo';
+import { demoQuery, buildCube, demoHistory, demoSnapshot } from '../src/core/demo';
+import { appendHistory, diffAlerts, digestText, progress, summarize } from '../src/core/history';
+import { diagnostics, isLastDayPartial, reconcile } from '../src/core/reconcile';
 import { reportMarkdown } from '../src/core/exportReport';
 import { investigationPrompt } from '../src/core/investigate';
 import type { CostRow, Snapshot } from '../src/core/types';
+import { DEFAULT_SETTINGS } from '../src/core/types';
 import { addDays, dateRange, sum } from '../src/core/util';
 
 const TODAY = '2026-11-18';
@@ -104,8 +107,8 @@ describe('anomaly detection', () => {
 
   it('respects the minimum-impact setting', () => {
     const snap = emptySnapshot(series('S', 'u', (ago) => (ago === 10 ? 160 : 100) * wobble(ago)));
-    expect(analyze(snap, { costBasis: 'UnblendedCost', deepScan: false, anomalyMinImpact: 25, theme: 'system' }).anomalies).toHaveLength(1);
-    expect(analyze(snap, { costBasis: 'UnblendedCost', deepScan: false, anomalyMinImpact: 500, theme: 'system' }).anomalies).toHaveLength(0);
+    expect(analyze(snap, { ...DEFAULT_SETTINGS, anomalyMinImpact: 25 }).anomalies).toHaveLength(1);
+    expect(analyze(snap, { ...DEFAULT_SETTINGS, anomalyMinImpact: 500 }).anomalies).toHaveLength(0);
   });
 });
 
@@ -252,5 +255,109 @@ describe('investigation prompt', () => {
     expect(bedrock.p).toContain('ModelId');
     const ext = prompts.find(({ a }) => /Extended Support/.test(a.title) && /Relational/.test(a.service))!;
     expect(ext.p).toContain('describe-db-instances');
+  });
+});
+
+describe('reconciliation', () => {
+  it('passes on consistent data and offers figures to compare', () => {
+    const snap = demoSnapshot(TODAY);
+    const r = reconcile(snap);
+    expect(r.checks.find((c) => c.id === 'slices')?.status).toBe('pass');
+    expect(r.checks.some((c) => c.status === 'fail')).toBe(false);
+    expect(r.compare.length).toBe(2);
+    expect(r.consoleUrl).toContain('startDate=2026-10-01');
+    expect(r.consoleUrl).toContain('endDate=2026-10-31');
+  });
+
+  it('fails when the same month totals differently by account', () => {
+    const snap = demoSnapshot(TODAY);
+    snap.dailyByAccount = snap.dailyByAccount.map((x) => ({ ...x, cost: x.cost * 1.2 }));
+    const c = reconcile(snap).checks.find((x) => x.id === 'slices')!;
+    expect(c.status).toBe('fail');
+    expect(c.detail).toContain('by account');
+  });
+
+  it('flags an AWS forecast that disagrees with the run rate', () => {
+    const snap = demoSnapshot(TODAY);
+    snap.forecast = { remaining: 500000 };
+    expect(reconcile(snap).checks.find((x) => x.id === 'forecast')?.status).toBe('warn');
+  });
+
+  it('detects an incomplete last day on live data and leaves it out of the analysis', () => {
+    const rows = series('S', 'u', (ago) => (ago === 1 ? 120 : 1000) * wobble(ago));
+    const snap = emptySnapshot(rows);
+    expect(isLastDayPartial(snap)).toBe(true);
+    const r = analyze(snap);
+    expect(r.briefing.dataThrough).toBe(addDays(TODAY, -2));
+    expect(r.anomalies).toHaveLength(0);
+    // a full last day is kept
+    expect(isLastDayPartial(emptySnapshot(series('S', 'u', (ago) => 1000 * wobble(ago))))).toBe(false);
+  });
+
+  it('diagnostics carry totals but no account ids or resource names', () => {
+    const snap = demoSnapshot(TODAY);
+    const d = diagnostics(snap);
+    expect(() => JSON.parse(d)).not.toThrow();
+    for (const a of snap.accounts) expect(d).not.toContain(a.id);
+    expect(d).not.toContain('/ecs/checkout-api');
+    expect(d).not.toContain('vol-0');
+  });
+});
+
+describe('history, alerts and progress', () => {
+  const snap = demoSnapshot(TODAY);
+  const r = analyze(snap);
+  const cur = summarize(snap, r);
+
+  it('says nothing on the very first scan', () => {
+    expect(diffAlerts(null, cur)).toHaveLength(0);
+  });
+
+  it('alerts on a new ongoing anomaly, once', () => {
+    const prev = { ...cur, anomalies: {} };
+    const alerts = diffAlerts(prev, cur).filter((a) => a.kind === 'anomaly');
+    expect(alerts.length).toBe(Object.values(cur.anomalies).filter((a) => a.ongoing).length);
+    expect(diffAlerts(cur, cur)).toHaveLength(0);
+  });
+
+  it('alerts when a commitment crosses an expiry threshold, not every day', () => {
+    const id = Object.keys(cur.expirations)[0]; // 19 days left
+    const at = (daysLeft: number) => ({ ...cur, expirations: { [id]: { ...cur.expirations[id], daysLeft } } });
+    expect(diffAlerts(at(31), at(30)).filter((a) => a.kind === 'expiry')).toHaveLength(1);
+    expect(diffAlerts(at(30), at(29)).filter((a) => a.kind === 'expiry')).toHaveLength(0);
+    expect(diffAlerts(at(15), at(14)).filter((a) => a.kind === 'expiry')).toHaveLength(1);
+    // first time we ever see it, already inside a threshold
+    expect(diffAlerts({ ...cur, expirations: {} }, at(19)).filter((a) => a.kind === 'expiry')).toHaveLength(1);
+  });
+
+  it('groups several new opportunities into one alert', () => {
+    const prev = { ...cur, insights: {} };
+    const a = diffAlerts(prev, cur).filter((x) => x.kind === 'savings');
+    expect(a).toHaveLength(1);
+    expect(a[0].title).toMatch(/new savings opportunities/);
+  });
+
+  it('keeps one history entry per day', () => {
+    const h = appendHistory(appendHistory([], cur), { ...cur, at: cur.at.replace('T', 'T') + '' });
+    expect(h).toHaveLength(1);
+    const next = { ...cur, today: addDays(TODAY, 1), at: addDays(TODAY, 1) + 'T09:00:00Z' };
+    expect(appendHistory(h, next)).toHaveLength(2);
+  });
+
+  it('counts opportunities that disappeared as resolved savings', () => {
+    const history = demoHistory(TODAY, r);
+    const p = progress(history, r);
+    expect(p.scans).toBe(8);
+    expect(p.resolved.map((x) => x.id)).toContain('demo-dev-nightly');
+    expect(p.realizedMonthly).toBe(412 + 690 + 530 + 340 + 1180);
+    expect(p.anomaliesCleared).toBe(1);
+    // still-open opportunities are not counted
+    expect(p.resolved.some((x) => x.id === 'sp-buy-Compute')).toBe(false);
+  });
+
+  it('writes a digest', () => {
+    const t = digestText(snap, r, progress(demoHistory(TODAY, r), r));
+    expect(t).toContain('Top opportunities');
+    expect(t).toContain('Resolved since');
   });
 });

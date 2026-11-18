@@ -314,6 +314,7 @@ export const DIM_LABEL: Record<string, string> = {
   PURCHASE_TYPE: 'Purchase option',
   INSTANCE_TYPE: 'Instance type',
   RECORD_TYPE: 'Charge type',
+  RESOURCE_ID: 'Resource',
 };
 
 export function dimLabel(dim: string): string {

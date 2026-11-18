@@ -3,6 +3,7 @@ import {
   CostExplorerClient,
   GetAnomaliesCommand,
   GetCostAndUsageCommand,
+  GetCostAndUsageWithResourcesCommand,
   GetCostForecastCommand,
   GetDimensionValuesCommand,
   GetReservationCoverageCommand,
@@ -22,6 +23,7 @@ import {
   type SavingsPlansPurchaseRecommendationDetail,
   type TermInYears,
 } from '@aws-sdk/client-cost-explorer';
+import { STSClient } from '@aws-sdk/client-sts';
 import { BudgetsClient, DescribeBudgetsCommand } from '@aws-sdk/client-budgets';
 import { CostOptimizationHubClient, ListRecommendationsCommand } from '@aws-sdk/client-cost-optimization-hub';
 import type {
@@ -48,18 +50,22 @@ import type {
 } from '../../src/core/types';
 import { pruneCache, readCache, readJsonFile, snapshotFile, writeCache, writeJsonFile } from './cache';
 import {
+  bucketByMonth,
   buildCostAndUsageRequest,
+  buildResourceCostRequest,
   cacheKey,
   cacheTtlMs,
   currencyOf,
   excludeCreditsExpression,
   isFresh,
   mapCostAndUsage,
+  normalizeResourceKeys,
   SETTLED_TTL_MS,
   totalsByKey,
+  usesResourceId,
 } from './ce';
 import { addDays, addMonths, diffDays, monthStart, num, todayIso } from './dates';
-import { classifyError, isDataUnavailable, isValidation, WarningSink } from './errors';
+import { classifyError, isDataUnavailable, isValidation, resourceCostError, WarningSink } from './errors';
 import {
   combineCoverage,
   commitmentTotals,
@@ -78,6 +84,23 @@ import {
   type RiCoverageDay,
   type SpServiceCoverage,
 } from './mappers';
+import {
+  accountLabel,
+  assumeMemberRole,
+  assumeRoleWarning,
+  invalidRoleNameWarning,
+  isValidRoleName,
+  MEMBER_ACCOUNT_CAP,
+  MEMBER_CONCURRENCY,
+  memberCapWarning,
+  memberRoleArn,
+  membersNotInspectedWarning,
+  normalizeRoleName,
+  partitionOf,
+  selectMemberAccounts,
+  stampAccount,
+  stsRegion,
+} from './members';
 import { pool } from './pool';
 import { emptyFindings, mergeFindings, scanRegion, type Creds } from './resources';
 
@@ -94,6 +117,8 @@ export interface LiveSourceOptions {
 export interface LiveSource {
   query(q: CostQuery): Promise<CostResult>;
   scan(onProgress?: (p: ScanProgress) => void): Promise<Snapshot>;
+  /** paid Cost Explorer requests ($0.01 each) made by query() since this source was created; cache hits are free */
+  queryRequests(): number;
 }
 
 const BILLING_REGION = 'us-east-1';
@@ -150,6 +175,7 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
     count: () => void,
     o: { includeCredits?: boolean } = {},
   ): Promise<{ rows: CostRow[]; currency?: string }> {
+    if (usesResourceId(q)) return fetchResourceCosts(q, today, count, o);
     const req = buildCostAndUsageRequest(q, costBasis, today, o);
     if (!req) return { rows: [] };
     const rows: CostRow[] = [];
@@ -166,7 +192,38 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
     return { rows, currency };
   }
 
+  /**
+   * Resource-level costs (RESOURCE_ID as a group-by or filter): a different API that only knows the
+   * last 14 days at daily granularity. Monthly queries are answered by bucketing the daily rows.
+   */
+  async function fetchResourceCosts(
+    q: CostQuery,
+    today: string,
+    count: () => void,
+    o: { includeCredits?: boolean } = {},
+  ): Promise<{ rows: CostRow[]; currency?: string }> {
+    const req = buildResourceCostRequest(q, costBasis, today, o);
+    if (!req) return { rows: [] };
+    const rows: CostRow[] = [];
+    let currency: string | undefined;
+    let NextPageToken: string | undefined;
+    let pages = 0;
+    try {
+      do {
+        count();
+        const page = await ce.send(new GetCostAndUsageWithResourcesCommand({ ...req, NextPageToken }));
+        rows.push(...normalizeResourceKeys(mapCostAndUsage(page, q.groupBy, costBasis), q.groupBy));
+        currency ??= currencyOf(page, costBasis);
+        NextPageToken = page.NextPageToken;
+      } while (NextPageToken && ++pages < MAX_PAGES);
+    } catch (e) {
+      throw resourceCostError(e); // needs 'ce:GetCostAndUsageWithResources' and the resource-level opt-in
+    }
+    return { rows: q.granularity === 'MONTHLY' ? bucketByMonth(rows) : rows, currency };
+  }
+
   const inflight = new Map<string, Promise<CostResult>>();
+  let queryRequests = 0;
 
   async function query(q: CostQuery): Promise<CostResult> {
     const today = todayIso(now());
@@ -177,7 +234,9 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
     const running = inflight.get(key);
     if (running) return running;
     const p = (async () => {
-      const { rows } = await fetchCosts(q, today, () => undefined);
+      const { rows } = await fetchCosts(q, today, () => {
+        queryRequests++;
+      });
       const result: CostResult = { rows };
       await writeCache(cacheDir, key, result, now().getTime());
       return result;
@@ -694,25 +753,77 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
     // ── phase 3: optional resource scan ──
     let resources: ResourceFindings | null = null;
     let regionsScanned: string[] = [];
+    const accountsScanned: string[] = [];
     if (settings.deepScan) {
       regionsScanned = selectRegions(recentByServiceRegion, { minSpend: 1, cap: 12 });
-      total += Math.max(0, regionsScanned.length - 1);
       resources = emptyFindings();
       if (!regionsScanned.length) {
         done++;
         report('No regions with spend to inspect');
       }
-      const parts = await pool(
-        regionsScanned.map((region) => () =>
-          section<ResourceFindings>('resources', `Inspecting resources in ${region}`, undefined, emptyFindings(), () =>
-            scanRegion(region, credentials, warnings, startedAt),
-          ),
-        ),
-        3,
-      );
-      for (const p of parts) mergeFindings(resources, p);
-    }
+      // Member accounts of the organization, entered through a read-only role (docs/MEMBER_ROLE.md).
+      const roleName = normalizeRoleName(settings.memberRoleName);
+      const candidates = selectMemberAccounts(accounts, dailyByAccount, identity.accountId, d30, { cap: Number.MAX_SAFE_INTEGER });
+      let members: typeof candidates = [];
+      if (!roleName) {
+        if (candidates.length) warnings.add(membersNotInspectedWarning(candidates.length));
+      } else if (!isValidRoleName(roleName)) {
+        warnings.add(invalidRoleNameWarning(roleName));
+      } else {
+        members = candidates.slice(0, MEMBER_ACCOUNT_CAP);
+        if (candidates.length > members.length) warnings.add(memberCapWarning(members.length, candidates.length - members.length));
+      }
 
+      if (regionsScanned.length) {
+        const ownInfo = accounts.find((a) => a.id === identity.accountId) ?? { id: identity.accountId, name: identity.accountId };
+        const targets = [{ ...ownInfo, own: true }, ...members.map((m) => ({ id: m.id, name: m.name, own: false }))];
+        total += targets.length * regionsScanned.length - 1;
+        const partition = partitionOf(identity.arn);
+        const sts = members.length ? new STSClient({ ...clientCfg, region: stsRegion(partition) }) : null;
+        const regions = regionsScanned;
+        try {
+          const results = await pool(
+            targets.map((t, i) => async (): Promise<{ id: string; findings: ResourceFindings | null }> => {
+              const where = targets.length > 1 ? `${accountLabel(t)} (${i + 1} of ${targets.length})` : null;
+              let creds: Creds = credentials;
+              if (!t.own) {
+                try {
+                  if (!sts) throw new Error('STS client unavailable');
+                  creds = await assumeMemberRole(sts, memberRoleArn(partition, t.id, roleName));
+                } catch {
+                  done += regions.length;
+                  report(`Could not enter ${where ?? accountLabel(t)}`);
+                  return { id: t.id, findings: null };
+                }
+              }
+              const parts = await pool(
+                regions.map((region) => () =>
+                  section<ResourceFindings>('resources', `Inspecting resources in ${where ?? region}`, undefined, emptyFindings(), () =>
+                    scanRegion(region, creds, warnings, startedAt),
+                  ),
+                ),
+                3,
+              );
+              const findings = emptyFindings();
+              for (const p of parts) mergeFindings(findings, p);
+              return { id: t.id, findings: stampAccount(findings, t.id) };
+            }),
+            MEMBER_CONCURRENCY,
+          );
+          const failed: string[] = [];
+          for (const r of results) {
+            if (!r.findings) failed.push(r.id);
+            else {
+              mergeFindings(resources, r.findings);
+              accountsScanned.push(r.id);
+            }
+          }
+          if (failed.length) warnings.add(assumeRoleWarning(failed, members.length, roleName));
+        } finally {
+          sts?.destroy();
+        }
+      }
+    }
     const self = accounts.find((a) => a.id === identity.accountId);
     const snapshot: Snapshot = {
       meta: {
@@ -728,6 +839,7 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
         ceRequests,
         deepScan: settings.deepScan,
         regionsScanned,
+        accountsScanned,
         warnings: warnings.list,
       },
       accounts,
@@ -760,7 +872,7 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
     return snapshot;
   }
 
-  return { query, scan };
+  return { query, scan, queryRequests: () => queryRequests };
 }
 
 /** Last cached scan for an account, if any (and if it still matches the current Snapshot shape). */

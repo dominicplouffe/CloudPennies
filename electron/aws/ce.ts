@@ -4,10 +4,11 @@ import type {
   Expression,
   GetCostAndUsageCommandInput,
   GetCostAndUsageCommandOutput,
+  GetCostAndUsageWithResourcesCommandInput,
   GroupDefinition,
 } from '@aws-sdk/client-cost-explorer';
 import type { CostBasis, CostQuery, CostRow, Dim } from '../../src/core/types';
-import { addDays } from './dates';
+import { addDays, monthStart } from './dates';
 
 export const HOUR_MS = 3_600_000;
 export const QUERY_TTL_MS = 6 * HOUR_MS;
@@ -89,6 +90,81 @@ export function buildCostAndUsageRequest(
   const filter = buildFilter(q, opts);
   if (filter) req.Filter = filter;
   return req;
+}
+
+// ── resource-level costs (GetCostAndUsageWithResources) ──
+
+/** Cost Explorer only keeps resource-level data for the last 14 days. */
+export const RESOURCE_LEVEL_DAYS = 14;
+
+/** true when the query must go through GetCostAndUsageWithResources */
+export function usesResourceId(q: Pick<CostQuery, 'groupBy' | 'filters'>): boolean {
+  return q.groupBy.includes('RESOURCE_ID') || (q.filters?.RESOURCE_ID?.length ?? 0) > 0;
+}
+
+/** Earliest start date the resource-level API accepts. */
+export const resourceLevelStart = (today: string): string => addDays(today, -RESOURCE_LEVEL_DAYS);
+
+/**
+ * GetCostAndUsageWithResources insists on a Filter. When the query has none of its own (and credits are
+ * deliberately included), this one matches every record.
+ */
+export const matchAllExpression = (): Expression => ({
+  Not: { Dimensions: { Key: 'RECORD_TYPE', Values: ['CloudPenniesMatchNothing'] } },
+});
+
+/**
+ * CostQuery -> GetCostAndUsageWithResources request.
+ *  - the start is clamped to today-14 (older resource-level data does not exist);
+ *  - the request is always DAILY: MONTHLY queries are bucketed client-side with `bucketByMonth`;
+ *  - a Filter is always present (the API requires one).
+ * Returns null when the (clamped) period is empty, in which case no request should be made.
+ */
+export function buildResourceCostRequest(
+  q: CostQuery,
+  costBasis: CostBasis,
+  today: string,
+  opts: { includeCredits?: boolean } = {},
+): GetCostAndUsageWithResourcesCommandInput | null {
+  if (q.groupBy.length > 2) throw new Error('Cost Explorer supports at most two group-by dimensions');
+  const end = clampEnd(q.end, today);
+  const min = resourceLevelStart(today);
+  const start = q.start < min ? min : q.start;
+  if (!(start < end)) return null;
+  const req: GetCostAndUsageWithResourcesCommandInput = {
+    TimePeriod: { Start: start, End: end },
+    Granularity: 'DAILY',
+    Filter: buildFilter(q, opts) ?? matchAllExpression(),
+    Metrics: [costBasis, 'UsageQuantity'],
+  };
+  if (q.groupBy.length) req.GroupBy = q.groupBy.map(toGroupDefinition);
+  return req;
+}
+
+/** Costs that belong to no particular resource come back under a placeholder key; the app uses ''. */
+export function normalizeResourceKeys(rows: CostRow[], groupBy: Dim[]): CostRow[] {
+  const i = groupBy.indexOf('RESOURCE_ID');
+  if (i < 0) return rows;
+  for (const r of rows) {
+    const k = (r.keys[i] ?? '').trim();
+    r.keys[i] = /^no\s?resource\s?id$/i.test(k) ? '' : k;
+  }
+  return rows;
+}
+
+/** Daily rows -> one row per (keys, calendar month), dated at the month start. Order of first appearance is kept. */
+export function bucketByMonth(rows: CostRow[]): CostRow[] {
+  const m = new Map<string, CostRow>();
+  for (const r of rows) {
+    const date = monthStart(r.date);
+    const k = date + JSON.stringify(r.keys);
+    const cur = m.get(k);
+    if (cur) {
+      cur.cost += r.cost;
+      cur.usage = (cur.usage ?? 0) + (r.usage ?? 0);
+    } else m.set(k, { keys: [...r.keys], date, cost: r.cost, usage: r.usage ?? 0 });
+  }
+  return [...m.values()];
 }
 
 /** Tag group keys come back as `key$value` (`key$` when untagged). */

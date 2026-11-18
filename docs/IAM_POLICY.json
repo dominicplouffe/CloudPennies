@@ -6,6 +6,7 @@
       "Effect": "Allow",
       "Action": [
         "ce:GetCostAndUsage",
+        "ce:GetCostAndUsageWithResources",
         "ce:GetDimensionValues",
         "ce:GetTags",
         "ce:GetCostForecast",
@@ -40,6 +41,14 @@
         "elasticloadbalancing:DescribeTargetHealth"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "CloudPenniesAssumeMemberRole",
+      "Effect": "Allow",
+      "Action": [
+        "sts:AssumeRole"
+      ],
+      "Resource": "arn:aws:iam::*:role/CloudPenniesReadOnly"
     }
   ]
 }

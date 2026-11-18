@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Insight, InsightCategory } from '../../core/types';
-import { money, pct } from '../../core/util';
+import { fmtDateLong, money, pct } from '../../core/util';
 import { CATEGORY, Empty, Icon, LevelBadge, PageHead } from '../bits';
-import { Legend, Segments } from '../charts';
+import { Legend, Segments, TimeChart } from '../charts';
 import { useStore } from '../store';
 
 export function Savings() {
@@ -46,6 +46,8 @@ export function Savings() {
           </div>
         </div>
       )}
+
+      <ProgressCard />
 
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '18px 0 12px' }}>
         <FilterChip on={cat === 'all'} onClick={() => setCat('all')} label={`All (${active.length})`} />
@@ -216,4 +218,79 @@ export function InsightRow({ i, defaultOpen }: { i: Insight; defaultOpen?: boole
 /** render `code` spans in steps */
 function renderStep(text: string) {
   return text.split(/(`[^`]+`)/).map((part, i) => (part.startsWith('`') ? <code key={i}>{part.slice(1, -1)}</code> : part));
+}
+
+/** What has been achieved since CloudPennies first scanned this account */
+function ProgressCard() {
+  const s = useStore();
+  const p = s.progress;
+  const [open, setOpen] = useState(false);
+  if (!p || p.scans < 2) {
+    return (
+      <div className="note" style={{ marginTop: 14 }}>
+        <Icon name="info" size={16} />
+        <span>CloudPennies remembers every scan. Once you have fixed something, it will show up here as savings you have actually banked — come back after your next scan.</span>
+      </div>
+    );
+  }
+  const trend = p.trend.slice(-60);
+  return (
+    <div className="card pad" style={{ marginTop: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.2fr)', gap: 28, alignItems: 'center' }}>
+        <div>
+          <div className="eyebrow">Progress since {p.firstScan ? fmtDateLong(p.firstScan) : 'your first scan'}</div>
+          <div style={{ fontSize: 28, fontWeight: 620, letterSpacing: '-0.025em', marginTop: 4 }}>
+            {money(p.realizedMonthly)}
+            <small style={{ fontSize: 14, fontWeight: 500, color: 'var(--muted)', letterSpacing: 0 }}> /mo resolved</small>
+          </div>
+          <p className="ink2" style={{ fontSize: 13, marginTop: 4 }}>
+            {p.resolved.length
+              ? `${p.resolved.length} opportunit${p.resolved.length === 1 ? 'y' : 'ies'} that appeared in earlier scans ${p.resolved.length === 1 ? 'is' : 'are'} gone — fixed, or no longer applicable.`
+              : 'Nothing has dropped off the list yet.'}{' '}
+            {p.anomaliesCleared > 0 && `${p.anomaliesCleared} anomal${p.anomaliesCleared === 1 ? 'y has' : 'ies have'} cleared.`} Based on {p.scans} scans.
+          </p>
+          {p.resolved.length > 0 && (
+            <button className="link" style={{ marginTop: 8, fontSize: 13 }} onClick={() => setOpen(!open)}>
+              {open ? 'Hide' : 'See'} what was resolved
+            </button>
+          )}
+        </div>
+        <div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 2 }}>
+            Savings still on the table, per scan
+          </div>
+          <TimeChart kind="area" height={130} dates={trend.map((t) => t.date)} series={[{ name: 'Open savings / month', color: 'var(--good)', values: trend.map((t) => t.openSavings) }]} />
+        </div>
+      </div>
+      {open && (
+        <table className="tbl" style={{ marginTop: 14 }}>
+          <thead>
+            <tr>
+              <th style={{ paddingLeft: 0 }}>Resolved</th>
+              <th>Last seen</th>
+              <th className="r" style={{ paddingRight: 0 }}>
+                Was worth
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {p.resolved.map((x) => (
+              <tr key={x.id}>
+                <td style={{ paddingLeft: 0 }}>
+                  <span style={{ color: 'var(--good-ink)', marginRight: 8, verticalAlign: -3, display: 'inline-flex' }}>
+                    <Icon name="check" size={15} />
+                  </span>
+                  {x.title}
+                </td>
+                <td className="ink2">{fmtDateLong(x.lastSeen)}</td>
+                <td className="r" style={{ paddingRight: 0, fontWeight: 600 }}>
+                  {money(x.savings)}/mo
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
 }

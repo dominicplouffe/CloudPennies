@@ -46,7 +46,14 @@ function stubCe() {
       case 'GetTagsCommand':
         return { Tags: ['Name', 'team'] };
       case 'GetCostForecastCommand':
-        return { Total: { Amount: '100' }, ForecastResultsByTime: [{ MeanValue: '100', PredictionIntervalLowerBound: '80', PredictionIntervalUpperBound: '130' }] };
+        // Total deliberately disagrees with the daily rows: the collector must sum the days, not trust Total
+        return {
+          Total: { Amount: '999' },
+          ForecastResultsByTime: [
+            { MeanValue: '60', PredictionIntervalLowerBound: '50', PredictionIntervalUpperBound: '80' },
+            { MeanValue: '40', PredictionIntervalLowerBound: '30', PredictionIntervalUpperBound: '50' },
+          ],
+        };
       case 'GetAnomaliesCommand':
         throw denied('ce:GetAnomalies');
       case 'GetSavingsPlansUtilizationDetailsCommand':

@@ -108,6 +108,34 @@ describe('anomaly detection', () => {
   });
 });
 
+describe('month-end projection', () => {
+  const steady = () => emptySnapshot(series('S', 'u', (ago) => 1000 * wobble(ago)));
+  // TODAY is Nov 18: 17 days of data in November, 13 days still to come
+  it('adds a plausible AWS forecast of the remaining days to month-to-date', () => {
+    const snap = steady();
+    snap.forecast = { remaining: 12000 };
+    const b = analyze(snap).briefing;
+    expect(b.projectionSource).toBe('aws');
+    expect(b.projected).toBeCloseTo(b.mtd + 12000, 6);
+    expect(b.forecastRejected).toBeUndefined();
+  });
+  it('rejects a forecast that cannot be the remaining days and falls back to the run rate', () => {
+    const snap = steady();
+    snap.forecast = { remaining: 30000 }; // looks like a whole-month figure, not 13 days at ~$1,000
+    const b = analyze(snap).briefing;
+    expect(b.projectionSource).toBe('run-rate');
+    expect(b.forecastRejected?.awsRemaining).toBe(30000);
+    expect(b.projectedRemaining).toBeGreaterThan(12000);
+    expect(b.projectedRemaining).toBeLessThan(14000);
+    expect(b.projected).toBeLessThan(b.mtd * 2);
+  });
+  it('uses the run rate when AWS gives no forecast', () => {
+    const b = analyze(steady()).briefing;
+    expect(b.projectionSource).toBe('run-rate');
+    expect(b.projected).toBeCloseTo(b.mtd + b.projectedRemaining, 6);
+  });
+});
+
 describe('insights from billing data alone', () => {
   it('finds extended support, idle IPs, gp2 and NAT without any resource access', () => {
     const rows = [

@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { analyze } from '../core/analysis';
-import { demoSnapshot, demoSource } from '../core/demo';
-import type { Bridge, ConnectionInfo, CredentialInput, DataSource, Dim, Report, ScanProgress, Settings, Snapshot, Thread } from '../core/types';
+import { demoHistory, demoSnapshot, demoSource } from '../core/demo';
+import { progress as computeProgress, type Progress } from '../core/history';
+import type { Bridge, ConnectionInfo, CredentialInput, DataSource, Dim, HistoryEntry, Report, ScanProgress, Settings, Snapshot, Thread } from '../core/types';
 import { DEFAULT_SETTINGS } from '../core/types';
 
 export const bridge: Bridge | undefined = (window as unknown as { cloudpennies?: Bridge }).cloudpennies;
@@ -19,6 +20,8 @@ interface Store {
   phase: 'loading' | 'welcome' | 'ready';
   snapshot: Snapshot | null;
   report: Report | null;
+  /** what has been achieved since the first scan; null until history is loaded */
+  progress: Progress | null;
   settings: Settings;
   connection: ConnectionInfo;
   source: DataSource;
@@ -65,7 +68,8 @@ const DEFAULT_EXPLORE: ExploreState = { filters: {}, groupBy: 'SERVICE', period:
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<Store['phase']>('loading');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [settings, setSettings] = useState<Settings>(() => lsGet('cp.settings', DEFAULT_SETTINGS));
+  const [settings, setSettings] = useState<Settings>(() => ({ ...DEFAULT_SETTINGS, ...lsGet<Partial<Settings>>('cp.settings', {}) }));
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [connection, setConnection] = useState<ConnectionInfo>({ connected: false });
   const [scanning, setScanning] = useState<ScanProgress | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
@@ -76,6 +80,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const scanLock = useRef(false);
 
   const report = useMemo(() => (snapshot ? analyze(snapshot, settings) : null), [snapshot, settings]);
+
+  // scan history: from disk for a live account, synthesized for the demo
+  useEffect(() => {
+    if (!snapshot) return setHistory([]);
+    if (snapshot.meta.mode === 'live' && bridge) {
+      let dead = false;
+      bridge
+        .getHistory()
+        .then((h) => !dead && setHistory(h))
+        .catch(() => !dead && setHistory([]));
+      return () => {
+        dead = true;
+      };
+    }
+    setHistory(demoHistory(snapshot.meta.today, analyze(snapshot, DEFAULT_SETTINGS)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot]);
+  const progress = useMemo(() => (report ? computeProgress(history, report) : null), [history, report]);
+
+  // a scheduled scan in the main process replaced the snapshot
+  useEffect(() => {
+    if (!bridge?.onSnapshotUpdated) return;
+    return bridge.onSnapshotUpdated((snap) => {
+      setSnapshot(snap);
+      setPhase('ready');
+    });
+  }, []);
 
   const source = useMemo<DataSource>(() => {
     if (snapshot?.meta.mode === 'live' && bridge) return { query: (q) => bridge.query(q) };
@@ -109,7 +140,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!bridge) return setPhase('welcome');
       try {
         const [s, c] = await Promise.all([bridge.getSettings(), bridge.getConnection()]);
-        setSettings(s);
+        setSettings({ ...DEFAULT_SETTINGS, ...s });
         setConnection(c);
         if (!c.connected) return setPhase('welcome');
         const snap = await bridge.loadSnapshot();
@@ -149,6 +180,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     phase,
     snapshot,
     report,
+    progress,
     settings,
     connection,
     source,

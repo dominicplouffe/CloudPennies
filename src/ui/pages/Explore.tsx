@@ -47,7 +47,9 @@ export function Explore() {
   const snap = s.snapshot!;
   const { filters, groupBy, period } = s.explore;
   const today = snap.meta.today;
-  const range = useMemo(() => periodRange(period, today), [period, today]);
+  const byResource = groupBy === 'RESOURCE_ID' || !!filters.RESOURCE_ID;
+  // resource-level cost only exists for the last 14 days
+  const range = useMemo(() => (byResource ? { start: addDays(today, -14), end: today, prevStart: null, monthly: false } : periodRange(period, today)), [period, today, byResource]);
   const [rows, setRows] = useState<CostRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,6 +100,11 @@ export function Explore() {
     if (groupBy === 'LINKED_ACCOUNT') return { label: accountName(key) ?? key, sub: accountName(key) ? key : undefined };
     if (groupBy === 'REGION') return { label: REGION_NAMES[key] ?? (key || 'No region'), sub: REGION_NAMES[key] ? key : undefined };
     if (groupBy.startsWith('TAG:')) return { label: key || '(untagged)' };
+    if (groupBy === 'RESOURCE_ID') {
+      if (!key) return { label: 'Not tied to a resource', sub: 'fees, taxes, usage AWS does not attribute' };
+      const short = key.includes(':') ? key.split(':').slice(5).join(':') || key : key;
+      return { label: short, sub: short === key ? undefined : key };
+    }
     return { label: key || '(none)' };
   };
 
@@ -135,10 +142,10 @@ export function Explore() {
     return i >= 0 ? SERIES_COLORS[i] : OTHER_COLOR;
   };
 
-  const DIMS: Dim[] = ['SERVICE', 'USAGE_TYPE', 'LINKED_ACCOUNT', 'REGION', ...snap.tagKeys.slice(0, 2).map((k) => `TAG:${k}` as Dim), 'PURCHASE_TYPE'];
+  const DIMS: Dim[] = ['SERVICE', 'USAGE_TYPE', 'LINKED_ACCOUNT', 'REGION', ...snap.tagKeys.slice(0, 2).map((k) => `TAG:${k}` as Dim), 'PURCHASE_TYPE', 'RESOURCE_ID'];
   const drill = (key: string) => {
     const nextFilters = { ...filters, [groupBy]: [key] };
-    const order: Dim[] = ['SERVICE', 'USAGE_TYPE', 'LINKED_ACCOUNT', 'REGION', ...snap.tagKeys.slice(0, 1).map((k) => `TAG:${k}` as Dim)];
+    const order: Dim[] = ['SERVICE', 'USAGE_TYPE', 'LINKED_ACCOUNT', 'REGION', ...snap.tagKeys.slice(0, 1).map((k) => `TAG:${k}` as Dim), 'RESOURCE_ID'];
     const next = order.find((d) => !(d in nextFilters)) ?? groupBy;
     s.setExplore({ ...s.explore, filters: nextFilters, groupBy: next });
     setShowAll(false);
@@ -183,7 +190,7 @@ export function Explore() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '22px 0 12px' }}>
         <div className="seg">
           {PERIODS.map((p) => (
-            <button key={p.id} className={period === p.id ? 'on' : ''} onClick={() => s.setExplore({ ...s.explore, period: p.id })}>
+            <button key={p.id} disabled={byResource} style={byResource ? { opacity: 0.45 } : undefined} className={!byResource && period === p.id ? 'on' : ''} onClick={() => s.setExplore({ ...s.explore, period: p.id })}>
               {p.label}
             </button>
           ))}
@@ -200,6 +207,14 @@ export function Explore() {
         </div>
       </div>
 
+      {byResource && (
+        <div className="note" style={{ marginBottom: 12 }}>
+          <Icon name="info" size={16} />
+          <span>
+            Cost by resource covers the <b>last 14 days</b> only — that is all AWS keeps at this level. {snap.meta.mode === 'live' ? 'Each view here is a paid Cost Explorer request ($0.01), cached for a few hours.' : ''}
+          </span>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minHeight: 30, marginBottom: 14 }}>
         <button className={`chip`} style={{ paddingRight: 11, cursor: filterDims.length ? 'pointer' : 'default', background: filterDims.length ? undefined : 'var(--surface-2)' }} onClick={() => s.setExplore({ ...s.explore, filters: {}, groupBy: 'SERVICE' })}>
           All spend

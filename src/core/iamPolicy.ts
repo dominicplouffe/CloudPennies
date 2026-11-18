@@ -1,9 +1,10 @@
-// The read-only IAM permissions CloudPennies uses. Keep in sync with docs/IAM_POLICY.json
-// (tests/collector.test.ts checks that they match).
+// The read-only IAM permissions CloudPennies uses. Keep in sync with docs/IAM_POLICY.json and
+// docs/member-role.yaml (tests/collector.test.ts checks that they match).
 
 /** Required: billing, Cost Explorer, budgets and Cost Optimization Hub (read-only). */
 export const IAM_POLICY_BILLING: string[] = [
   'ce:GetCostAndUsage',
+  'ce:GetCostAndUsageWithResources',
   'ce:GetDimensionValues',
   'ce:GetTags',
   'ce:GetCostForecast',
@@ -35,8 +36,27 @@ export const IAM_POLICY_SCAN: string[] = [
   'elasticloadbalancing:DescribeTargetHealth',
 ];
 
-export function iamPolicyJson(includeScan: boolean): string {
-  const statements = [{ Sid: 'CloudPenniesBilling', Effect: 'Allow', Action: IAM_POLICY_BILLING, Resource: '*' }];
+/**
+ * Optional: enter member accounts of an AWS Organization to run the resource scan there
+ * (see docs/MEMBER_ROLE.md). Scoped to the one read-only role, never `*`.
+ */
+export const IAM_POLICY_ASSUME: string[] = ['sts:AssumeRole'];
+
+/** Role name used in the docs and the CloudFormation template (docs/member-role.yaml). */
+export const DEFAULT_MEMBER_ROLE_NAME = 'CloudPenniesReadOnly';
+
+/**
+ * The policy to attach to the CloudPennies user/role.
+ * The AssumeRole statement is only included when `memberRoleName` is a non-empty string.
+ */
+export function iamPolicyJson(includeScan: boolean, memberRoleName?: string): string {
+  const statements: { Sid: string; Effect: 'Allow'; Action: string[]; Resource: string }[] = [
+    { Sid: 'CloudPenniesBilling', Effect: 'Allow', Action: IAM_POLICY_BILLING, Resource: '*' },
+  ];
   if (includeScan) statements.push({ Sid: 'CloudPenniesResourceScan', Effect: 'Allow', Action: IAM_POLICY_SCAN, Resource: '*' });
+  const role = typeof memberRoleName === 'string' ? memberRoleName.trim().replace(/^\/+/, '') : '';
+  if (role) {
+    statements.push({ Sid: 'CloudPenniesAssumeMemberRole', Effect: 'Allow', Action: IAM_POLICY_ASSUME, Resource: `arn:aws:iam::*:role/${role}` });
+  }
   return JSON.stringify({ Version: '2012-10-17', Statement: statements }, null, 2);
 }

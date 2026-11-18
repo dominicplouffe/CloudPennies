@@ -4,7 +4,7 @@
 // hand-authored commitments / recommendations / resource findings that are
 // consistent with the cube.
 
-import type { CostQuery, CostResult, CostRow, DataSource, Dim, HubRec, LogGroupInfo, Snapshot, VolumeInfo } from './types';
+import type { CostQuery, CostResult, CostRow, DataSource, Dim, HistoryEntry, HubRec, InsightCategory, LogGroupInfo, Report, Snapshot, VolumeInfo } from './types';
 import { addDays, addMonths, diffDays, monthStart, rng, sum, todayIso } from './util';
 
 interface Item {
@@ -232,11 +232,31 @@ function dimValue(it: Item, d: Dim): string {
       const m = it.usageType.match(/:((?:db\.|cache\.)?[a-z]\d[a-z]*\.\w+(?:\.search)?)$/);
       return m ? m[1] : 'NoInstanceType';
     }
+    case 'RESOURCE_ID':
+      return demoResourceId(it);
     default:
       if (d === 'TAG:team') return it.team;
       if (d === 'TAG:env') return it.env;
       return '';
   }
+}
+
+/** a plausible resource id for a demo line item (one resource per item keeps the cube small) */
+function demoResourceId(it: Item): string {
+  const h = (it.service + it.usageType + it.account + it.team).split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7).toString(16).padStart(8, '0');
+  const arn = (svc: string, res: string) => `arn:aws:${svc}:${it.region}:${it.account}:${res}`;
+  const u = it.usageType;
+  if (/BoxUsage|SpotUsage/.test(u)) return `i-0${h}${h.slice(0, 8)}`;
+  if (/EBS:Volume/.test(u)) return `vol-0${h}${h.slice(0, 8)}`;
+  if (/NatGateway/.test(u)) return `nat-0${h}${h.slice(0, 8)}`;
+  if (/CloudWatch/.test(it.service) && /DataProcessing|TimedStorage/.test(u)) return arn('logs', `log-group:/ecs/${it.team || 'shared'}-api`);
+  if (/Relational/.test(it.service)) return arn('rds', `db:${it.team || 'shared'}-primary`);
+  if (/Simple Storage/.test(it.service)) return `acme-${it.team || 'shared'}-${it.account.slice(-4)}`;
+  if (/Lambda/.test(it.service)) return arn('lambda', `function:${it.team || 'shared'}-handler`);
+  if (/DynamoDB/.test(it.service)) return arn('dynamodb', `table/${it.team || 'shared'}-orders`);
+  if (/ElastiCache/.test(it.service)) return arn('elasticache', `cluster:${it.team || 'shared'}-cache`);
+  if (it.recordType !== 'Usage') return '';
+  return arn(it.service.replace(/^(Amazon|AWS)\s+/, '').replace(/\W+/g, '').toLowerCase(), `${h}`);
 }
 
 export function demoQuery(cube: DemoCube, q: CostQuery): CostResult {
@@ -500,6 +520,7 @@ export function demoSnapshot(today = todayIso()): Snapshot {
   );
 
   const lg = (name: string, gb: number, retentionDays: number | null, region = 'us-east-1'): LogGroupInfo => ({
+    account: /staging/.test(name) ? STG : /search/.test(name) ? DATA : PROD,
     name,
     region,
     storedBytes: gb * 1024 ** 3,
@@ -524,6 +545,7 @@ export function demoSnapshot(today = todayIso()): Snapshot {
   ];
 
   const dash = (name: string, viewedAgo: number | null, modifiedAgo: number) => ({
+    account: /data|cost-poc/.test(name) ? DATA : PROD,
     name,
     region: 'us-east-1',
     lastModified: addDays(today, -modifiedAgo) + 'T10:00:00Z',
@@ -547,6 +569,7 @@ export function demoSnapshot(today = todayIso()): Snapshot {
   ];
 
   const vol = (i: number, sizeGb: number, type: string, attached: boolean, ageDays: number, name?: string): VolumeInfo => ({
+    account: i % 4 === 0 ? SBX : PROD,
     id: mkId('vol', i),
     region: 'us-east-1',
     sizeGb,
@@ -579,6 +602,7 @@ export function demoSnapshot(today = todayIso()): Snapshot {
       ceRequests: 0,
       deepScan: true,
       regionsScanned: ['us-east-1', 'us-west-2', 'eu-west-1'],
+      accountsScanned: ACCOUNTS.map((a) => a.id),
       warnings: [],
     },
     accounts: ACCOUNTS,
@@ -637,7 +661,7 @@ export function demoSnapshot(today = todayIso()): Snapshot {
       volumes,
       oldSnapshots: { count: 1284, totalGb: 96400 },
       addresses: [
-        ...Array.from({ length: 24 }, (_, i) => ({ ip: `52.${20 + i}.${(i * 53) % 255}.${(i * 91 + 7) % 255}`, region: i > 19 ? 'us-west-2' : 'us-east-1', allocationId: mkId('eipalloc', i), associated: false })),
+        ...Array.from({ length: 24 }, (_, i) => ({ ip: `52.${20 + i}.${(i * 53) % 255}.${(i * 91 + 7) % 255}`, region: i > 19 ? 'us-west-2' : 'us-east-1', allocationId: mkId('eipalloc', i), associated: false, account: i % 3 === 0 ? STG : PROD })),
         ...Array.from({ length: 30 }, (_, i) => ({ ip: `34.${200 + (i % 50)}.${(i * 17) % 255}.${(i * 29 + 3) % 255}`, region: 'us-east-1', allocationId: mkId('eipalloc', 100 + i), associated: true })),
       ],
       loadBalancers: [
@@ -655,4 +679,41 @@ export function demoSnapshot(today = todayIso()): Snapshot {
       ],
     },
   };
+}
+
+/**
+ * A believable scan history for the demo account: eight weekly scans in which a handful of
+ * opportunities were open and have since been fixed, so the progress view has something to show.
+ */
+export function demoHistory(today: string, current: Report): HistoryEntry[] {
+  const fixed: [string, string, number, InsightCategory, number][] = [
+    // id, title, savings, category, fixed N weeks ago
+    ['demo-old-gp2', 'Move 31 EBS volumes from gp2 to gp3', 412, 'modernize', 6],
+    ['demo-idle-rds', '2 idle RDS instances to stop', 690, 'idle', 5],
+    ['demo-s3-versions', 'Old object versions never expire in 4 buckets', 530, 'storage', 3],
+    ['demo-nat-endpoints', 'Add S3 gateway endpoints to 3 VPCs', 340, 'network', 2],
+    ['demo-dev-nightly', 'Dev environments run nights and weekends', 1180, 'idle', 1],
+  ];
+  const openNow = Object.fromEntries(current.insights.map((i) => [i.id, { title: i.title, savings: i.monthlySavings, category: i.category }]));
+  const out: HistoryEntry[] = [];
+  for (let w = 8; w >= 1; w--) {
+    const day = addDays(today, -7 * w);
+    const insights = { ...openNow };
+    // opportunities that only showed up recently were not open back then
+    if (w > 2) for (const id of Object.keys(insights)) if (/cw-log-ingest|ext-support-Amazon Elastic Container/.test(id)) delete insights[id];
+    for (const [id, title, savings, category, fixedAgo] of fixed) if (w > fixedAgo) insights[id] = { title, savings, category };
+    out.push({
+      at: day + 'T08:00:00.000Z',
+      today: day,
+      last30: current.briefing.last30 * (1 - w * 0.011) + (w > 3 ? 900 : 0),
+      mtd: 0,
+      projected: 0,
+      insights,
+      anomalies: w === 3 ? { 'demo-nat': { title: 'NAT Gateway data processing is spiking', ongoing: true, impact: 410, start: addDays(day, -3) } } : {},
+      expirations: {},
+      esrPct: current.commitments.esrPct,
+      coveragePct: current.commitments.coveragePct,
+    });
+  }
+  return out;
 }

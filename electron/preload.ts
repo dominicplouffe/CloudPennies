@@ -1,6 +1,6 @@
 // Preload: the only bridge between the sandboxed renderer and the main process.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { Bridge, ScanProgress } from '../src/core/types';
+import type { Bridge, ScanProgress, Snapshot } from '../src/core/types';
 
 const bridge: Bridge = {
   platform: process.platform,
@@ -22,6 +22,17 @@ const bridge: Bridge = {
   query: (q) => ipcRenderer.invoke('cp:query', q),
   saveFile: (defaultName, content) => ipcRenderer.invoke('cp:saveFile', defaultName, content),
   openExternal: (url) => ipcRenderer.invoke('cp:openExternal', url),
+  getHistory: () => ipcRenderer.invoke('cp:getHistory'),
+  setSlackWebhook: (url) => ipcRenderer.invoke('cp:setSlackWebhook', url),
+  hasSlackWebhook: () => ipcRenderer.invoke('cp:hasSlackWebhook'),
+  testNotifications: () => ipcRenderer.invoke('cp:testNotifications'),
+  onSnapshotUpdated: (cb) => {
+    const listener = (_e: IpcRendererEvent, snapshot: Snapshot) => cb(snapshot);
+    ipcRenderer.on('cp:snapshotUpdated', listener);
+    return () => {
+      ipcRenderer.removeListener('cp:snapshotUpdated', listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld('cloudpennies', bridge);

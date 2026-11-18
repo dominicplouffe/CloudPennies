@@ -1,7 +1,7 @@
 {
   "name": "cloudpennies",
   "productName": "CloudPennies",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CloudPennies \u2014 Every cloud dollar has a story. A simple, deep AWS cost analysis desktop app.",
   "author": "CloudPennies",
   "license": "MIT",
@@ -41,19 +41,18 @@
         {
           "target": "dmg",
           "arch": [
-            "arm64",
-            "x64"
+            "universal"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "arm64",
-            "x64"
+            "universal"
           ]
         }
       ],
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-${version}-mac.${ext}"
     },
     "linux": {
       "category": "Office;Finance",

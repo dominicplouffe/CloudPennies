@@ -8,6 +8,7 @@ import { loadSharedConfigFiles } from '@smithy/shared-ini-file-loader';
 import type { AwsCredentialIdentity, AwsCredentialIdentityProvider } from '@aws-sdk/types';
 import { DEFAULT_SETTINGS, type ConnectionInfo, type CostBasis, type CredentialInput, type Settings } from '../src/core/types';
 import { friendlyConnectError, maskKeyId } from './aws/errors';
+import { validateSlackWebhook } from './backgroundLogic';
 
 interface KeySecrets {
   accessKeyId: string;
@@ -37,6 +38,10 @@ const dataDir = () => app.getPath('userData');
 const credentialsPath = () => path.join(dataDir(), 'credentials.json');
 const settingsPath = () => path.join(dataDir(), 'settings.json');
 export const cacheDir = () => path.join(dataDir(), 'cache');
+/** Scan history per account. Deliberately outside cacheDir(): it survives the cache prune and disconnect(). */
+export const historyDir = () => path.join(dataDir(), 'history');
+const slackPath = () => path.join(dataDir(), 'slack.json');
+const backgroundStatePath = () => path.join(dataDir(), 'background-state.json');
 
 async function readJson<T>(file: string): Promise<T | null> {
   try {
@@ -168,7 +173,10 @@ export async function connect(input: CredentialInput): Promise<{ ok: true; info:
   }
 }
 
-/** Forget the credentials and every cached byte of billing data. */
+/**
+ * Forget the credentials and the cached billing data. The compact scan history (historyDir)
+ * is kept on purpose, so savings progress survives reconnecting the same account.
+ */
 export async function disconnect(): Promise<void> {
   await fs.rm(credentialsPath(), { force: true }).catch(() => undefined);
   await fs.rm(cacheDir(), { recursive: true, force: true }).catch(() => undefined);
@@ -176,7 +184,10 @@ export async function disconnect(): Promise<void> {
 
 // ── settings ──
 
-const COST_BASES: CostBasis[] = ['UnblendedCost', 'AmortizedCost', 'NetAmortizedCost'];
+const COST_BASES: CostBasis[] = ['UnblendedCost', 'NetUnblendedCost', 'AmortizedCost', 'NetAmortizedCost'];
+const AUTO_SCAN_HOURS: Settings['autoScanHours'][] = [0, 6, 12, 24];
+/** IAM role names: up to 64 of these characters */
+const ROLE_NAME = /^[\w+=,.@-]{0,64}$/;
 const THEMES: Settings['theme'][] = ['system', 'light', 'dark'];
 
 /** Merge untrusted input over the defaults, keeping only well-typed values. */
@@ -188,6 +199,12 @@ export function sanitizeSettings(raw: unknown): Settings {
     ...(typeof r.deepScan === 'boolean' ? { deepScan: r.deepScan } : {}),
     ...(typeof r.anomalyMinImpact === 'number' && Number.isFinite(r.anomalyMinImpact) && r.anomalyMinImpact >= 0 ? { anomalyMinImpact: r.anomalyMinImpact } : {}),
     ...(THEMES.includes(r.theme as Settings['theme']) ? { theme: r.theme as Settings['theme'] } : {}),
+    ...(typeof r.memberRoleName === 'string' && ROLE_NAME.test(r.memberRoleName.trim()) ? { memberRoleName: r.memberRoleName.trim() } : {}),
+    ...(AUTO_SCAN_HOURS.includes(r.autoScanHours as Settings['autoScanHours']) ? { autoScanHours: r.autoScanHours as Settings['autoScanHours'] } : {}),
+    ...(typeof r.notifications === 'boolean' ? { notifications: r.notifications } : {}),
+    ...(typeof r.runInBackground === 'boolean' ? { runInBackground: r.runInBackground } : {}),
+    ...(typeof r.launchAtLogin === 'boolean' ? { launchAtLogin: r.launchAtLogin } : {}),
+    ...(typeof r.weeklyDigest === 'boolean' ? { weeklyDigest: r.weeklyDigest } : {}),
   };
 }
 
@@ -195,6 +212,76 @@ export async function getSettings(): Promise<Settings> {
   return sanitizeSettings(await readJson<unknown>(settingsPath()));
 }
 
-export async function saveSettings(s: Settings): Promise<void> {
-  await writePrivate(settingsPath(), sanitizeSettings(s));
+export async function saveSettings(s: Settings): Promise<Settings> {
+  const clean = sanitizeSettings(s);
+  await writePrivate(settingsPath(), clean);
+  return clean;
+}
+
+// ── Slack webhook (a secret: stored like credentials, never sent to the renderer, never logged) ──
+
+interface StoredWebhook {
+  encrypted: boolean;
+  /** base64: safeStorage ciphertext when `encrypted`, otherwise the UTF-8 URL */
+  secret: string;
+}
+
+/** Validate and store a Slack incoming-webhook URL; null clears it. */
+export async function setSlackWebhook(url: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (url === null || url === undefined || url === '') {
+    try {
+      await fs.rm(slackPath(), { force: true });
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'The Slack webhook could not be removed from this computer.' };
+    }
+  }
+  const v = validateSlackWebhook(url);
+  if (!v.ok) return v;
+  try {
+    const stored: StoredWebhook = encryptionAvailable()
+      ? { encrypted: true, secret: safeStorage.encryptString(v.url).toString('base64') }
+      : { encrypted: false, secret: Buffer.from(v.url, 'utf8').toString('base64') };
+    await writePrivate(slackPath(), stored);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'The Slack webhook could not be saved on this computer.' };
+  }
+}
+
+/** The stored webhook URL for use in the main process only, or null (none, unreadable or no longer valid). */
+export async function getSlackWebhook(): Promise<string | null> {
+  const s = await readJson<StoredWebhook>(slackPath());
+  if (!s || typeof s.secret !== 'string') return null;
+  try {
+    const buf = Buffer.from(s.secret, 'base64');
+    const v = validateSlackWebhook(s.encrypted ? safeStorage.decryptString(buf) : buf.toString('utf8'));
+    return v.ok ? v.url : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function hasSlackWebhook(): Promise<boolean> {
+  return (await getSlackWebhook()) !== null;
+}
+
+// ── background state (nothing secret) ──
+
+export interface BackgroundState {
+  /** accountId -> ISO week ("2026-W47") of the last weekly digest posted to Slack */
+  digestWeek: Record<string, string>;
+}
+
+export async function getBackgroundState(): Promise<BackgroundState> {
+  const s = await readJson<Partial<BackgroundState>>(backgroundStatePath());
+  const digestWeek: Record<string, string> = {};
+  if (s && s.digestWeek && typeof s.digestWeek === 'object') {
+    for (const [k, v] of Object.entries(s.digestWeek)) if (typeof v === 'string') digestWeek[k] = v;
+  }
+  return { digestWeek };
+}
+
+export async function saveBackgroundState(s: BackgroundState): Promise<void> {
+  await writePrivate(backgroundStatePath(), s);
 }

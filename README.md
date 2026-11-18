@@ -32,6 +32,14 @@ It is built for someone who owns an AWS bill and has ten minutes, not an afterno
 </tr>
 </table>
 
+### Beyond the five screens
+
+- **Can I trust these numbers?** Every scan checks itself: the same month must total the same by service, usage type, account and region. Settings shows the checks, the exact figures to compare with Cost Explorer, and a button that opens the matching console view. An incomplete latest day is detected and left out of trends.
+- **Whole-organization resource scan.** Give CloudPennies the name of a read-only role that exists in each member account and it assumes that role to inspect every account, not only the one the key belongs to. See [`docs/MEMBER_ROLE.md`](docs/MEMBER_ROLE.md).
+- **Scheduled scans and alerts.** Rescans on a schedule while running (optionally from the menu bar or tray), with desktop notifications for new anomalies, commitments approaching expiry and new opportunities. Optional Slack webhook for alerts and a Monday digest.
+- **Progress tracking.** Each scan is remembered. Opportunities that disappear are counted as resolved savings, with a trend of what is still on the table.
+- **Cost by resource.** Explore can split any view by individual resource for the last 14 days, when resource-level data is enabled in Cost Explorer.
+
 ### What it looks for
 
 Findings come from three tiers of evidence. A stronger tier suppresses the weaker one for the same topic, so nothing is counted twice.
@@ -96,7 +104,7 @@ You can connect with an access key or pick a profile from `~/.aws`.
 ### Privacy and cost
 
 - Your key is encrypted with the operating system keychain (Electron `safeStorage`) and stored only on your computer. If you choose a profile, only its name is stored.
-- CloudPennies has no server. It talks to AWS APIs and nothing else — no telemetry, no update pings.
+- CloudPennies has no server. It talks to AWS APIs and nothing else — no telemetry, no update pings. The one exception is a Slack webhook, and only if you add one: it receives alert titles and dollar amounts.
 - AWS charges $0.01 per Cost Explorer API request. A full scan typically makes 30–80 requests. Results are cached on disk, and the app shows the request count for every scan.
 
 ## How it works
@@ -136,9 +144,11 @@ npm run demo-report
 
 ## Status and limits
 
-- Version 0.1. The collector is covered by unit tests with stubbed AWS clients but has **not yet been run against a live AWS account**; expect rough edges on the first real scan, and please report them. Sections that fail (missing permission, service not enabled) are skipped and listed in Settings rather than failing the scan.
+- Version 0.2. The collector is covered by unit tests with stubbed AWS clients and has had only limited use against live accounts; expect rough edges, check Settings → "Can I trust these numbers?", and report problems with the diagnostics button there. Sections that fail (missing permission, service not enabled) are skipped and listed in Settings rather than failing the scan.
 - Savings marked "rough estimate" are inferred from billing data with stated assumptions. Treat them as leads, not quotes.
-- AWS only. Kubernetes cost allocation, unit economics and scheduled email digests are not built yet.
+- Resource-level cost comes from Cost Explorer (14 days). Reading the Cost and Usage Report for full history is not built yet.
+- AWS only. Kubernetes cost allocation, unit economics, custom cost groupings and commitment what-if modelling are not built yet.
+- Builds are unsigned and do not auto-update.
 
 ## License
 

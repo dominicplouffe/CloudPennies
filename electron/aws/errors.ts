@@ -96,6 +96,22 @@ export function classifyError(section: string, e: unknown, action?: string): Sca
   return { section, message: `${name}: ${oneLine(msg)}` };
 }
 
+/** Shown when Cost Explorer's resource-level data (an opt-in preference) is switched off. */
+export const RESOURCE_LEVEL_DISABLED_MESSAGE =
+  "Resource-level cost data is not enabled for this account. Turn on 'Resource-level data at daily granularity' in Billing → Cost Management preferences (free), wait up to 48 hours, then try again.";
+
+/**
+ * Error to show for a failed GetCostAndUsageWithResources call. AWS reports the missing opt-in as a
+ * DataUnavailableException or as an access-denied error that is not an IAM denial; everything else keeps
+ * its usual friendly classification.
+ */
+export function resourceCostError(e: unknown): Error {
+  const msg = errMessage(e);
+  const iamDenial = /not authorized to perform|explicit deny/i.test(msg);
+  const notEnabled = !iamDenial && !CRED_NAMES.test(errName(e)) && (isDataUnavailable(e) || isOptIn(e) || isAccessDenied(e));
+  return new Error(notEnabled ? RESOURCE_LEVEL_DISABLED_MESSAGE : classifyError('resource-costs', e, 'ce:GetCostAndUsageWithResources').message);
+}
+
 function oneLine(s: string): string {
   const t = s.replace(/\s+/g, ' ').trim();
   return t.length > 240 ? t.slice(0, 237) + '…' : t;

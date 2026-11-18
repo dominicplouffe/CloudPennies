@@ -14,7 +14,7 @@ export function SettingsPage() {
   const [copied, setCopied] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const live = snap?.meta.mode === 'live' || s.connection.connected;
-  const policy = iamPolicyJson(true, s.settings.memberRoleName || undefined);
+  const policy = iamPolicyJson(true, s.settings.memberRoleName || undefined, s.settings.curEnabled ? 'YOUR-REPORT-BUCKET' : undefined);
 
   return (
     <>
@@ -195,7 +195,7 @@ export function SettingsPage() {
 
       <div className="section-h">
         <h2>IAM policy</h2>
-        <p>Read-only. Only the first statement is required.</p>
+        <p>Read-only. Only the first statement is required. Replace YOUR-REPORT-BUCKET with the bucket shown above.</p>
       </div>
       <div className="card pad" style={{ display: 'grid', gap: 10 }}>
         <pre className="policy" style={{ maxHeight: 280 }}>

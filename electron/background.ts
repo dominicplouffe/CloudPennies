@@ -2,7 +2,8 @@
 import { Notification, type BrowserWindow } from 'electron';
 import { analyze } from '../src/core/analysis';
 import { diffAlerts, digestText, progress, summarize } from '../src/core/history';
-import type { Alert, HistoryEntry, Report, ScanProgress, Settings, Snapshot } from '../src/core/types';
+import type { Alert, CurStatus, HistoryEntry, Report, ScanProgress, Settings, Snapshot } from '../src/core/types';
+import { curStatus, EMPTY_CUR_STATUS, importCur as importCurData, statusOf } from './aws/cur/importer';
 import { errMessage } from './aws/errors';
 import { createLiveSource, loadCachedSnapshot } from './aws/source';
 import { alertsSlackText, batchNotifications, digestDue, pickPreviousEntry, shouldScan } from './backgroundLogic';
@@ -23,6 +24,9 @@ const FIRST_TICK_MS = 30_000;
 
 let deps: BackgroundDeps = { getWindow: () => null, showWindow: () => undefined };
 let scanInFlight: Promise<ScanResult> | null = null;
+export type CurImportOutcome = { ok: true; status: CurStatus } | { ok: false; error: string };
+/** a report import started outside a scan; scans wait for it and it waits for scans (one lock, see runScan / importCur) */
+let curInFlight: Promise<CurImportOutcome> | null = null;
 let lastFailureAt: number | null = null;
 /** time of the newest snapshot per account, so the scheduler does not re-read the snapshot file at every tick */
 let lastScan: { accountId: string; at: number | null } | null = null;
@@ -63,6 +67,8 @@ export function runScan(origin: 'manual' | 'background'): Promise<ScanResult> {
   if (scanInFlight) return scanInFlight;
   const p = (async (): Promise<ScanResult> => {
     try {
+      // a scan imports the report itself, so it must not run next to a standalone import
+      if (curInFlight) await curInFlight.catch(() => undefined);
       const conn = await creds.resolveConnection();
       if (!conn) return { ok: false, error: 'Connect an AWS account first.' };
       const settings = await creds.getSettings();
@@ -84,6 +90,55 @@ export function runScan(origin: 'manual' | 'background'): Promise<ScanResult> {
     if (scanInFlight === p) scanInFlight = null;
   });
   return p;
+}
+
+/**
+ * Bridge.importCur: import (or update) the Cost and Usage Report now, outside a scan. Shares the scan
+ * lock: it waits for a running scan, and a scan started meanwhile waits for it. Progress goes out on
+ * the scan-progress channel.
+ */
+export function importCur(): Promise<CurImportOutcome> {
+  if (curInFlight) return curInFlight;
+  const p = (async (): Promise<CurImportOutcome> => {
+    try {
+      if (scanInFlight) await scanInFlight.catch(() => undefined);
+      const conn = await creds.resolveConnection();
+      if (!conn) return { ok: false, error: 'Connect an AWS account first.' };
+      const settings = await creds.getSettings();
+      let done = 0;
+      const total = settings.curMonths + 1;
+      const r = await importCurData({
+        credentials: conn.credentials,
+        accountId: conn.identity.accountId,
+        cacheDir: creds.cacheDir(),
+        settings,
+        onStep: (step) => send('cp:scanProgress', { step, done: Math.min(done++, total - 1), total } satisfies ScanProgress),
+      });
+      send('cp:scanProgress', { step: 'Done', done: total, total } satisfies ScanProgress);
+      // nothing usable at all is a failure for someone who asked for an import; partial problems travel in the status
+      if (r.problem && !r.months.length) return { ok: false, error: r.problem.message };
+      return { ok: true, status: statusOf(r) };
+    } catch (e) {
+      return { ok: false, error: errMessage(e) || 'The import failed.' };
+    }
+  })();
+  curInFlight = p;
+  void p.finally(() => {
+    if (curInFlight === p) curInFlight = null;
+  });
+  return p;
+}
+
+/** Bridge.getCurStatus: exports on the account and what is imported. Never throws. */
+export async function getCurStatus(refresh?: boolean): Promise<CurStatus> {
+  try {
+    const conn = await creds.resolveConnection();
+    if (!conn) return { ...EMPTY_CUR_STATUS };
+    const settings = await creds.getSettings();
+    return await curStatus({ credentials: conn.credentials, accountId: conn.identity.accountId, cacheDir: creds.cacheDir(), settings, refresh: refresh === true });
+  } catch (e) {
+    return { ...EMPTY_CUR_STATUS, lastError: errMessage(e) || 'The Cost and Usage Report status could not be read.' };
+  }
 }
 
 /** History is written before the scan resolves; notifications and Slack run on their own. Never throws. */

@@ -189,6 +189,9 @@ const AUTO_SCAN_HOURS: Settings['autoScanHours'][] = [0, 6, 12, 24];
 /** IAM role names: up to 64 of these characters */
 const ROLE_NAME = /^[\w+=,.@-]{0,64}$/;
 const THEMES: Settings['theme'][] = ['system', 'light', 'dark'];
+const CUR_MONTHS: Settings['curMonths'][] = [1, 3, 6, 12];
+/** export ARN or `legacy:<report name>`; no control characters */
+const CUR_EXPORT_ID = /^[\x20-\x7e]{0,512}$/;
 
 /** Merge untrusted input over the defaults, keeping only well-typed values. */
 export function sanitizeSettings(raw: unknown): Settings {
@@ -205,6 +208,9 @@ export function sanitizeSettings(raw: unknown): Settings {
     ...(typeof r.runInBackground === 'boolean' ? { runInBackground: r.runInBackground } : {}),
     ...(typeof r.launchAtLogin === 'boolean' ? { launchAtLogin: r.launchAtLogin } : {}),
     ...(typeof r.weeklyDigest === 'boolean' ? { weeklyDigest: r.weeklyDigest } : {}),
+    ...(typeof r.curEnabled === 'boolean' ? { curEnabled: r.curEnabled } : {}),
+    ...(typeof r.curExportId === 'string' && CUR_EXPORT_ID.test(r.curExportId.trim()) ? { curExportId: r.curExportId.trim() } : {}),
+    ...(CUR_MONTHS.includes(r.curMonths as Settings['curMonths']) ? { curMonths: r.curMonths as Settings['curMonths'] } : {}),
   };
 }
 

@@ -38,7 +38,7 @@ It is built for someone who owns an AWS bill and has ten minutes, not an afterno
 - **Whole-organization resource scan.** Give CloudPennies the name of a read-only role that exists in each member account and it assumes that role to inspect every account, not only the one the key belongs to. See [`docs/MEMBER_ROLE.md`](docs/MEMBER_ROLE.md).
 - **Scheduled scans and alerts.** Rescans on a schedule while running (optionally from the menu bar or tray), with desktop notifications for new anomalies, commitments approaching expiry and new opportunities. Optional Slack webhook for alerts and a Monday digest.
 - **Progress tracking.** Each scan is remembered. Opportunities that disappear are counted as resolved savings, with a trend of what is still on the table.
-- **Cost by resource.** Explore can split any view by individual resource for the last 14 days, when resource-level data is enabled in Cost Explorer.
+- **Cost by resource, with history.** CloudPennies imports your Cost and Usage Report from S3 (Data Exports / CUR 2.0 or legacy, Parquet or CSV) and keeps a compact summary locally, so Explore can split any view by individual resource for whole months. Without a report it falls back to Cost Explorer's last 14 days. See [`docs/CUR.md`](docs/CUR.md).
 
 ### What it looks for
 
@@ -146,7 +146,7 @@ npm run demo-report
 
 - Version 0.2. The collector is covered by unit tests with stubbed AWS clients and has had only limited use against live accounts; expect rough edges, check Settings → "Can I trust these numbers?", and report problems with the diagnostics button there. Sections that fail (missing permission, service not enabled) are skipped and listed in Settings rather than failing the scan.
 - Savings marked "rough estimate" are inferred from billing data with stated assumptions. Treat them as leads, not quotes.
-- Resource-level cost comes from Cost Explorer (14 days). Reading the Cost and Usage Report for full history is not built yet.
+- The Cost and Usage Report reader is tested against generated Parquet and CSV files only, not real AWS exports. Tags are not imported from the report, and only the largest resources are kept individually.
 - AWS only. Kubernetes cost allocation, unit economics, custom cost groupings and commitment what-if modelling are not built yet.
 - Builds are unsigned and do not auto-update.
 

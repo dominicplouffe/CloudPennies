@@ -51,7 +51,7 @@ import {
 } from '../electron/aws/mappers';
 import { toIsoDate } from '../electron/aws/dates';
 import { pool } from '../electron/aws/pool';
-import { IAM_POLICY_ASSUME, IAM_POLICY_BILLING, IAM_POLICY_SCAN, iamPolicyJson } from '../src/core/iamPolicy';
+import { IAM_POLICY_ASSUME, IAM_POLICY_BILLING, IAM_POLICY_CUR, IAM_POLICY_SCAN, iamPolicyJson } from '../src/core/iamPolicy';
 import type { AccountInfo, CostQuery, CostRow } from '../src/core/types';
 
 const TODAY = '2026-11-18';
@@ -769,9 +769,40 @@ describe('other mappers', () => {
 describe('IAM policy', () => {
   it('docs/IAM_POLICY.json matches the exported policy', () => {
     const doc = JSON.parse(readFileSync(path.join(__dirname, '../docs/IAM_POLICY.json'), 'utf8'));
-    expect(doc).toEqual(JSON.parse(iamPolicyJson(true, 'CloudPenniesReadOnly')));
-    expect(doc.Statement.map((s: { Sid: string }) => s.Sid)).toEqual(['CloudPenniesBilling', 'CloudPenniesResourceScan', 'CloudPenniesAssumeMemberRole']);
+    expect(doc).toEqual(JSON.parse(iamPolicyJson(true, 'CloudPenniesReadOnly', 'YOUR-CUR-BUCKET')));
+    expect(doc.Statement.map((s: { Sid: string }) => s.Sid)).toEqual([
+      'CloudPenniesBilling',
+      'CloudPenniesResourceScan',
+      'CloudPenniesAssumeMemberRole',
+      'CloudPenniesCostAndUsageReport',
+      'CloudPenniesCostAndUsageReportList',
+    ]);
     expect(JSON.parse(iamPolicyJson(false)).Statement).toHaveLength(1);
+  });
+
+  it('includes the Cost and Usage Report statements only for a bucket, scoping S3 access to it', () => {
+    expect(JSON.parse(iamPolicyJson(true, 'CloudPenniesReadOnly')).Statement).toHaveLength(3);
+    expect(JSON.parse(iamPolicyJson(true, undefined, '  ')).Statement).toHaveLength(2);
+    const st = JSON.parse(iamPolicyJson(false, '', ' s3://acme-billing/reports/ ')).Statement;
+    expect(st).toHaveLength(3);
+    expect(st[1]).toEqual({
+      Sid: 'CloudPenniesCostAndUsageReport',
+      Effect: 'Allow',
+      Action: ['s3:GetObject', 's3:ListBucket'],
+      Resource: ['arn:aws:s3:::acme-billing', 'arn:aws:s3:::acme-billing/*'],
+    });
+    expect(st[2]).toEqual({
+      Sid: 'CloudPenniesCostAndUsageReportList',
+      Effect: 'Allow',
+      Action: ['bcm-data-exports:ListExports', 'bcm-data-exports:GetExport', 'cur:DescribeReportDefinitions'],
+      Resource: '*',
+    });
+    expect([...st[1].Action, ...st[2].Action]).toEqual(IAM_POLICY_CUR);
+    for (const a of IAM_POLICY_CUR) expect(a).toMatch(/:(Get|List|Describe)/);
+    // every permission the importer names in a warning is in the policy
+    const src = ['exports.ts', 'locate.ts', 'importer.ts'].map((f) => readFileSync(path.join(__dirname, '../electron/aws/cur', f), 'utf8')).join('\n');
+    const named = new Set([...src.matchAll(/'((?:s3|bcm-data-exports|cur):[A-Za-z]+)'/g)].map((m) => m[1]));
+    expect([...named].sort()).toEqual([...IAM_POLICY_CUR].sort());
   });
 
   it('includes the AssumeRole statement only for a non-empty member role name', () => {

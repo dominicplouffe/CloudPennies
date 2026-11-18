@@ -99,6 +99,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [snapshot]);
   const progress = useMemo(() => (report ? computeProgress(history, report) : null), [history, report]);
 
+  // a desktop notification was clicked
+  useEffect(() => {
+    if (!bridge?.onNavigate) return;
+    return bridge.onNavigate((t) => {
+      setFocusId(t.focusId ?? null);
+      setPageRaw(t.page);
+    });
+  }, []);
+
   // a scheduled scan in the main process replaced the snapshot
   useEffect(() => {
     if (!bridge?.onSnapshotUpdated) return;

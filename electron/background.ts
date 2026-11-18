@@ -156,7 +156,7 @@ function showNotifications(alerts: Alert[]): void {
   if (!notificationsSupported()) return;
   for (const plan of batchNotifications(alerts)) {
     try {
-      showNotification(plan.title, plan.body, () => void openFromNotification());
+      showNotification(plan.title, plan.body, () => void openFromNotification(plan.alert));
     } catch (e) {
       log('could not show a notification', e);
     }
@@ -164,10 +164,10 @@ function showNotifications(alerts: Alert[]): void {
 }
 
 /**
- * The Bridge has no navigation channel, so a click cannot open the alert's page: it brings the
- * window forward and re-sends the latest snapshot so the UI is showing current data.
+ * A click brings the window forward, refreshes it with the latest snapshot, and opens the page
+ * (and item) the alert is about. The summary notification has no single target and opens the briefing.
  */
-async function openFromNotification(): Promise<void> {
+async function openFromNotification(alert?: Alert): Promise<void> {
   deps.showWindow();
   try {
     const conn = await creds.getConnection();
@@ -177,6 +177,7 @@ async function openFromNotification(): Promise<void> {
   } catch (e) {
     log('could not refresh the window', e);
   }
+  send('cp:navigate', alert ? { page: alert.page, focusId: alert.focusId } : { page: 'briefing' });
 }
 
 /** Bridge.testNotifications: null when everything that is configured worked, otherwise what went wrong. */

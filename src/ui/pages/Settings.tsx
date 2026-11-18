@@ -14,7 +14,7 @@ export function SettingsPage() {
   const [copied, setCopied] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const live = snap?.meta.mode === 'live' || s.connection.connected;
-  const policy = (iamPolicyJson as (scan: boolean, memberRole?: string) => string)(true, s.settings.memberRoleName || undefined);
+  const policy = iamPolicyJson(true, s.settings.memberRoleName || undefined);
 
   return (
     <>

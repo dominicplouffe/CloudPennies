@@ -26,6 +26,13 @@ const bridge: Bridge = {
   setSlackWebhook: (url) => ipcRenderer.invoke('cp:setSlackWebhook', url),
   hasSlackWebhook: () => ipcRenderer.invoke('cp:hasSlackWebhook'),
   testNotifications: () => ipcRenderer.invoke('cp:testNotifications'),
+  onNavigate: (cb) => {
+    const listener = (_e: IpcRendererEvent, target: { page: 'anomalies' | 'commitments' | 'savings' | 'briefing'; focusId?: string }) => cb(target);
+    ipcRenderer.on('cp:navigate', listener);
+    return () => {
+      ipcRenderer.removeListener('cp:navigate', listener);
+    };
+  },
   onSnapshotUpdated: (cb) => {
     const listener = (_e: IpcRendererEvent, snapshot: Snapshot) => cb(snapshot);
     ipcRenderer.on('cp:snapshotUpdated', listener);

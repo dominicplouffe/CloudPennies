@@ -633,6 +633,8 @@ export interface Bridge {
   hasSlackWebhook(): Promise<boolean>;
   /** send a test desktop notification and, if a webhook is set, a test Slack message. Returns an error string on failure. */
   testNotifications(): Promise<string | null>;
+  /** fired when the user clicks a desktop notification: open this page (and item) */
+  onNavigate(cb: (target: { page: Alert['page']; focusId?: string }) => void): () => void;
   /** fired after a background (scheduled) scan replaced the cached snapshot */
   onSnapshotUpdated(cb: (snapshot: Snapshot) => void): () => void;
 }

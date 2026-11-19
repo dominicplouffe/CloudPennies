@@ -2,7 +2,7 @@
   "name": "cloudpennies",
   "productName": "CloudPennies",
   "version": "0.3.0",
-  "description": "CloudPennies \u2014 Every cloud dollar has a story. A simple, deep AWS cost analysis desktop app.",
+  "description": "CloudPennies — Every cloud dollar has a story. A simple, deep AWS cost analysis desktop app.",
   "author": "CloudPennies",
   "license": "MIT",
   "private": true,
@@ -17,10 +17,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "icons": "node scripts/make-icons.cjs",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:linux": "npm run build && electron-builder --linux",
-    "dist:win": "npm run build && electron-builder --win",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:linux": "npm run build && electron-builder --linux --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never",
     "demo-report": "tsx scripts/demo-report.ts"
   },
   "build": {
@@ -52,7 +52,12 @@
         }
       ],
       "icon": "build/icon.png",
-      "artifactName": "${productName}-${version}-mac.${ext}"
+      "artifactName": "${productName}-${version}-mac.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": true
     },
     "linux": {
       "category": "Office;Finance",
@@ -69,7 +74,14 @@
       "icon": "build/icon.png"
     },
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
-    "publish": null
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "dominicplouffe",
+        "repo": "CloudPennies",
+        "releaseType": "release"
+      }
+    ]
   },
   "devDependencies": {
     "@aws-sdk/client-bcm-data-exports": "^3.1171.0",
@@ -94,6 +106,7 @@
     "@vitejs/plugin-react": "^6.3.0",
     "electron": "^45.3.4",
     "electron-builder": "^26.18.0",
+    "electron-updater": "^6.8.11",
     "esbuild": "^0.28.2",
     "hyparquet": "^1.33.1",
     "hyparquet-compressors": "^1.1.3",

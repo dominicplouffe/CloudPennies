@@ -51,6 +51,7 @@ export function App() {
           ))}
         </nav>
         <div className="side-foot">
+          <UpdateBanner />
           <div className="acct">
             <span>{s.snapshot?.meta.mode === 'demo' ? 'Demo data' : 'AWS account'}</span>
             <b title={s.snapshot?.meta.accountLabel}>{s.snapshot?.meta.accountLabel ?? s.connection.accountId ?? 'Connecting…'}</b>
@@ -119,6 +120,30 @@ export function App() {
           )}
         </div>
       </main>
+    </div>
+  );
+}
+
+/** Shown in the sidebar only when there is something to do about an update */
+function UpdateBanner() {
+  const s = useStore();
+  const u = s.update;
+  if (u.state !== 'ready' && u.state !== 'available') return null;
+  return (
+    <div className="acct" style={{ borderColor: 'var(--accent)', background: 'var(--accent-wash)' }}>
+      <span>{u.state === 'ready' ? 'Update downloaded' : 'Update available'}</span>
+      <b>Version {u.version ?? 'new'}</b>
+      <div className="row">
+        {u.state === 'ready' ? (
+          <button className="btn sm primary" onClick={() => void bridge?.installUpdate()}>
+            Restart to update
+          </button>
+        ) : (
+          <button className="btn sm" onClick={() => void bridge?.openExternal(u.releaseUrl ?? 'https://github.com/dominicplouffe/CloudPennies/releases/latest')}>
+            Download
+          </button>
+        )}
+      </div>
     </div>
   );
 }

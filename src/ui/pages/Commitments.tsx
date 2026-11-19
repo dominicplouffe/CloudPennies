@@ -3,6 +3,7 @@ import { addMonths, fmtDateLong, money, monthShort, monthStart, pct, diffDays } 
 import { Empty, Icon, PageHead } from '../bits';
 import { Legend, TimeChart } from '../charts';
 import { useStore } from '../store';
+import { Planner } from './Planner';
 import { InsightRow } from './Savings';
 
 export function Commitments() {
@@ -146,6 +147,8 @@ export function Commitments() {
           ))}
         </div>
       )}
+
+      <Planner />
 
       {unused.length > 0 && (
         <>

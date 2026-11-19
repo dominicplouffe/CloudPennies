@@ -581,6 +581,8 @@ export interface Settings {
   curExportId: string;
   /** how many months of report data to keep locally, including the current month */
   curMonths: 1 | 3 | 6 | 12;
+  /** check GitHub Releases for a newer version and install it automatically */
+  autoUpdate: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -597,6 +599,7 @@ export const DEFAULT_SETTINGS: Settings = {
   curEnabled: true,
   curExportId: '',
   curMonths: 3,
+  autoUpdate: true,
 };
 
 export type CredentialInput =
@@ -648,6 +651,12 @@ export interface Bridge {
   getCurStatus(refresh?: boolean): Promise<CurStatus>;
   /** import (or update) report data now, outside a scan. Progress is reported through onScanProgress. */
   importCur(): Promise<{ ok: true; status: CurStatus } | { ok: false; error: string }>;
+  getAppInfo(): Promise<AppInfo>;
+  /** ask GitHub Releases whether a newer version exists (no-op outside a packaged build) */
+  checkForUpdates(): Promise<UpdateStatus>;
+  /** quit and install a downloaded update (only valid when state is 'ready') */
+  installUpdate(): Promise<void>;
+  onUpdateStatus(cb: (s: UpdateStatus) => void): () => void;
   /** fired when the user clicks a desktop notification: open this page (and item) */
   onNavigate(cb: (target: { page: Alert['page']; focusId?: string }) => void): () => void;
   /** fired after a background (scheduled) scan replaced the cached snapshot */
@@ -697,6 +706,32 @@ export interface CurStatus {
   /** why the last listing or import failed, in plain language */
   lastError?: string;
   missingPermission?: string;
+}
+
+// ───────────────────────────── App updates ─────────────────────────────
+
+export interface AppInfo {
+  version: string;
+  /** false when running from source (npm run dev:app): updates are disabled */
+  packaged: boolean;
+  platform: string;
+}
+
+export interface UpdateStatus {
+  /**
+   * idle: nothing checked yet · checking · up-to-date · available: a newer version exists but cannot be
+   * installed automatically (see releaseUrl) · downloading · ready: downloaded, restart to install ·
+   * error · unsupported: this build cannot update itself (running from source)
+   */
+  state: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error' | 'unsupported';
+  /** the newer version, when one was found */
+  version?: string;
+  /** download progress 0-100 */
+  percent?: number;
+  /** plain-language detail (error text, why it is unsupported) */
+  message?: string;
+  /** where to download the new version by hand */
+  releaseUrl?: string;
 }
 
 // ───────────────────────────── History ─────────────────────────────

@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { analyze } from '../core/analysis';
 import { demoHistory, demoSnapshot, demoSource } from '../core/demo';
 import { progress as computeProgress, type Progress } from '../core/history';
-import type { Bridge, ConnectionInfo, CredentialInput, DataSource, Dim, HistoryEntry, Report, ScanProgress, Settings, Snapshot, Thread } from '../core/types';
+import type { AppInfo, Bridge, ConnectionInfo, CredentialInput, DataSource, Dim, HistoryEntry, Report, ScanProgress, Settings, Snapshot, Thread, UpdateStatus } from '../core/types';
 import { DEFAULT_SETTINGS } from '../core/types';
 
 export const bridge: Bridge | undefined = (window as unknown as { cloudpennies?: Bridge }).cloudpennies;
@@ -20,6 +20,9 @@ interface Store {
   phase: 'loading' | 'welcome' | 'ready';
   snapshot: Snapshot | null;
   report: Report | null;
+  appInfo: AppInfo | null;
+  update: UpdateStatus;
+  checkForUpdates(): Promise<void>;
   /** what has been achieved since the first scan; null until history is loaded */
   progress: Progress | null;
   settings: Settings;
@@ -70,6 +73,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [settings, setSettings] = useState<Settings>(() => ({ ...DEFAULT_SETTINGS, ...lsGet<Partial<Settings>>('cp.settings', {}) }));
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [update, setUpdate] = useState<UpdateStatus>({ state: 'idle' });
   const [connection, setConnection] = useState<ConnectionInfo>({ connected: false });
   const [scanning, setScanning] = useState<ScanProgress | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
@@ -98,6 +103,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot]);
   const progress = useMemo(() => (report ? computeProgress(history, report) : null), [history, report]);
+
+  // app version and update status
+  useEffect(() => {
+    if (!bridge?.getAppInfo) return;
+    bridge.getAppInfo().then(setAppInfo).catch(() => undefined);
+    return bridge.onUpdateStatus?.(setUpdate);
+  }, []);
 
   // a desktop notification was clicked
   useEffect(() => {
@@ -189,6 +201,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     phase,
     snapshot,
     report,
+    appInfo,
+    update,
+    async checkForUpdates() {
+      if (!bridge?.checkForUpdates) return;
+      setUpdate({ state: 'checking' });
+      try {
+        setUpdate(await bridge.checkForUpdates());
+      } catch (e) {
+        setUpdate({ state: 'error', message: e instanceof Error ? e.message : String(e) });
+      }
+    },
     progress,
     settings,
     connection,

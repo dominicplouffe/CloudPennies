@@ -7,6 +7,7 @@ import { createLiveSource, loadCachedSnapshot } from './aws/source';
 import * as background from './background';
 import * as creds from './credentials';
 import { TRAY_ICON_DATA_URL } from './trayIcon';
+import * as updater from './updater';
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL;
 const INDEX_HTML = path.join(__dirname, '../dist/index.html');
@@ -273,6 +274,10 @@ function registerIpc(): void {
     return true;
   });
 
+  handle('cp:getAppInfo', () => updater.getAppInfo());
+  handle('cp:checkForUpdates', () => updater.checkForUpdates());
+  handle('cp:installUpdate', (): void => updater.installUpdate());
+
   handle('cp:openExternal', async (url: string): Promise<void> => {
     if (typeof url === 'string' && isHttpUrl(url)) await shell.openExternal(url);
   });
@@ -288,6 +293,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true;
     background.stopScheduler();
+    updater.stopUpdater();
   });
 
   app.on('web-contents-created', (_e, contents) => {
@@ -304,6 +310,14 @@ if (!app.requestSingleInstanceLock()) {
     const hidden = keepsRunningInBackground() && (startHidden || (isMac && app.getLoginItemSettings().wasOpenedAtLogin));
     createWindow(!hidden);
     background.startScheduler();
+    updater.initUpdater({
+      getWindow: () => win,
+      getSettings: () => settings,
+      // installing an update closes the window before "before-quit" fires; the close handler must not hide it
+      setQuitting: (value) => {
+        quitting = value;
+      },
+    });
     app.on('activate', () => showWindow());
   });
 

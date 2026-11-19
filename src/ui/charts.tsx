@@ -273,3 +273,92 @@ export function useDelayed<T>(value: T, ms: number): T {
   }, [value, ms]);
   return v;
 }
+
+/** A curve over a numeric x axis (not time), with labelled vertical markers and one highlighted x. */
+export function CurveChart({
+  points,
+  markers,
+  current,
+  height = 220,
+  xFormat,
+  yFormat,
+  onPick,
+}: {
+  points: { x: number; y: number }[];
+  markers: { x: number; label: string }[];
+  current: number;
+  height?: number;
+  xFormat: (x: number) => string;
+  yFormat: (y: number) => string;
+  onPick?: (x: number) => void;
+}) {
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<number | null>(null);
+  const m = { l: 52, r: 16, t: 26, b: 26 };
+  const iw = Math.max(10, width - m.l - m.r);
+  const ih = height - m.t - m.b;
+  const xMax = Math.max(...points.map((p) => p.x), 0.0001);
+  const yMaxRaw = Math.max(...points.map((p) => p.y), 1);
+  const yMinRaw = Math.min(...points.map((p) => p.y), 0);
+  const ticks = niceTicks(yMaxRaw * 1.05);
+  const yMax = ticks[ticks.length - 1];
+  const yMin = yMinRaw < 0 ? -niceTicks(-yMinRaw).slice(-1)[0] : 0;
+  const X = (x: number) => m.l + (x / xMax) * iw;
+  const Y = (y: number) => m.t + ih - ((y - yMin) / (yMax - yMin)) * ih;
+  const at = (x: number) => {
+    // linear interpolation on the curve
+    let i = points.findIndex((p) => p.x >= x);
+    if (i <= 0) return points[Math.max(0, i)]?.y ?? 0;
+    const a = points[i - 1];
+    const b = points[i];
+    return a.y + ((x - a.x) / (b.x - a.x || 1)) * (b.y - a.y);
+  };
+  const toX = (e: { currentTarget: EventTarget; clientX: number }) => {
+    const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
+    return Math.min(xMax, Math.max(0, ((e.clientX - rect.left - m.l) / iw) * xMax));
+  };
+  const yTicks = [...ticks, ...(yMin < 0 ? [yMin] : [])];
+  const shown = hover ?? current;
+  return (
+    <div className="chart" ref={ref} style={{ height }}>
+      {width > 0 && (
+        <svg width={width} height={height} onPointerMove={(e) => setHover(toX(e))} onPointerLeave={() => setHover(null)} onClick={(e) => onPick?.(toX(e))} style={{ cursor: onPick ? 'pointer' : undefined }} role="img" aria-label="Monthly savings by commitment level">
+          {yTicks.map((t) => (
+            <g key={t}>
+              <line x1={m.l} x2={width - m.r} y1={Y(t)} y2={Y(t)} stroke={t === 0 ? 'var(--line-2)' : 'var(--grid)'} />
+              <text x={m.l - 8} y={Y(t) + 4} textAnchor="end">
+                {yFormat(t)}
+              </text>
+            </g>
+          ))}
+          {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+            <text key={f} x={X(xMax * f)} y={height - 6} textAnchor={f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}>
+              {xFormat(xMax * f)}
+            </text>
+          ))}
+          <path d={`M${points.map((p) => `${X(p.x)},${Y(Math.max(p.y, yMin))}`).join('L')}L${X(xMax)},${Y(0)}L${X(0)},${Y(0)}Z`} fill="var(--good)" opacity={0.09} />
+          <path d={`M${points.map((p) => `${X(p.x)},${Y(p.y)}`).join('L')}`} fill="none" stroke="var(--good)" strokeWidth={2} strokeLinejoin="round" />
+          {markers.map((mk, i) => (
+            <g key={mk.label}>
+              <line x1={X(mk.x)} x2={X(mk.x)} y1={m.t - 4} y2={Y(yMin)} stroke="var(--line-2)" strokeDasharray="3 3" />
+              <text x={X(mk.x)} y={m.t - 9 - (i % 2) * 0} textAnchor={X(mk.x) > width - 90 ? 'end' : X(mk.x) < m.l + 40 ? 'start' : 'middle'} style={{ fill: 'var(--ink-2)', fontWeight: 600 }}>
+                {mk.label}
+              </text>
+            </g>
+          ))}
+          <line x1={X(shown)} x2={X(shown)} y1={m.t} y2={Y(yMin)} stroke="var(--ink-2)" strokeWidth={hover === null ? 1.5 : 1} />
+          <circle cx={X(shown)} cy={Y(at(shown))} r={5.5} fill="var(--accent)" stroke="var(--surface)" strokeWidth={2} />
+        </svg>
+      )}
+      {hover !== null && width > 0 && (
+        <div className="tip" style={X(hover) > width * 0.6 ? { right: width - X(hover) + 14, top: 30 } : { left: X(hover) + 14, top: 30 }}>
+          <div className="t">Commit {xFormat(hover)}</div>
+          <div className="r">
+            <span>Saves</span>
+            <b>{yFormat(at(hover))}/mo</b>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

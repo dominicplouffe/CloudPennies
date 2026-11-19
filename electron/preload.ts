@@ -1,6 +1,6 @@
 // Preload: the only bridge between the sandboxed renderer and the main process.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { Bridge, ScanProgress, Snapshot } from '../src/core/types';
+import type { Bridge, ScanProgress, Snapshot, UpdateStatus } from '../src/core/types';
 
 const bridge: Bridge = {
   platform: process.platform,
@@ -28,6 +28,16 @@ const bridge: Bridge = {
   testNotifications: () => ipcRenderer.invoke('cp:testNotifications'),
   getCurStatus: (refresh) => ipcRenderer.invoke('cp:getCurStatus', refresh === true),
   importCur: () => ipcRenderer.invoke('cp:importCur'),
+  getAppInfo: () => ipcRenderer.invoke('cp:getAppInfo'),
+  checkForUpdates: () => ipcRenderer.invoke('cp:checkForUpdates'),
+  installUpdate: () => ipcRenderer.invoke('cp:installUpdate'),
+  onUpdateStatus: (cb) => {
+    const listener = (_e: IpcRendererEvent, s: UpdateStatus) => cb(s);
+    ipcRenderer.on('cp:updateStatus', listener);
+    return () => {
+      ipcRenderer.removeListener('cp:updateStatus', listener);
+    };
+  },
   onNavigate: (cb) => {
     const listener = (_e: IpcRendererEvent, target: { page: 'anomalies' | 'commitments' | 'savings' | 'briefing'; focusId?: string }) => cb(target);
     ipcRenderer.on('cp:navigate', listener);

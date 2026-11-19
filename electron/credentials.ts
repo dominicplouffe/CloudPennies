@@ -211,6 +211,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     ...(typeof r.curEnabled === 'boolean' ? { curEnabled: r.curEnabled } : {}),
     ...(typeof r.curExportId === 'string' && CUR_EXPORT_ID.test(r.curExportId.trim()) ? { curExportId: r.curExportId.trim() } : {}),
     ...(CUR_MONTHS.includes(r.curMonths as Settings['curMonths']) ? { curMonths: r.curMonths as Settings['curMonths'] } : {}),
+    ...(typeof r.autoUpdate === 'boolean' ? { autoUpdate: r.autoUpdate } : {}),
   };
 }
 

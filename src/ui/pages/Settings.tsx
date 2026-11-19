@@ -193,6 +193,8 @@ export function SettingsPage() {
         )}
       </div>
 
+      <About />
+
       <div className="section-h">
         <h2>IAM policy</h2>
         <p>Read-only. Only the first statement is required. Replace YOUR-REPORT-BUCKET with the bucket shown above.</p>
@@ -618,6 +620,67 @@ function CurSection() {
               </tbody>
             </table>
           )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** Version and updates */
+function About() {
+  const s = useStore();
+  const info = s.appInfo;
+  const u = s.update;
+  if (!info) return null;
+  const text =
+    u.state === 'checking'
+      ? 'Checking for a newer version…'
+      : u.state === 'up-to-date'
+        ? 'You have the latest version.'
+        : u.state === 'downloading'
+          ? `Downloading version ${u.version ?? ''}${u.percent !== undefined ? ` — ${Math.round(u.percent)}%` : ''}…`
+          : u.state === 'ready'
+            ? `Version ${u.version ?? ''} is downloaded and will be installed when you restart.`
+            : u.state === 'available'
+              ? `Version ${u.version ?? ''} is available, but this copy cannot install it by itself${u.message ? ` (${u.message})` : ''}.`
+              : u.state === 'unsupported'
+                ? (u.message ?? 'This copy is running from source and does not update itself.')
+                : u.state === 'error'
+                  ? `Could not check for updates: ${u.message ?? 'unknown error'}`
+                  : info.packaged
+                    ? 'CloudPennies checks GitHub Releases for new versions.'
+                    : 'This copy is running from source and does not update itself.';
+  return (
+    <>
+      <div className="section-h">
+        <h2>About</h2>
+        <p>
+          CloudPennies {info.version} · {info.platform}
+        </p>
+      </div>
+      <div className="card rows">
+        <Row title="Update automatically" desc="Download new versions in the background and install them the next time you restart. The only thing sent is a request to GitHub for the latest release.">
+          <Toggle on={s.settings.autoUpdate} set={(v) => void s.saveSettings({ ...s.settings, autoUpdate: v })} />
+        </Row>
+        <div style={{ padding: '14px 22px', display: 'flex', justifyContent: 'space-between', gap: 24, alignItems: 'center' }}>
+          <div className={u.state === 'error' ? '' : 'ink2'} style={{ fontSize: 13, color: u.state === 'error' ? 'var(--crit-ink)' : undefined }}>
+            {text}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flex: 'none' }}>
+            {u.state === 'ready' && (
+              <button className="btn sm primary" onClick={() => void bridge?.installUpdate()}>
+                Restart to update
+              </button>
+            )}
+            {u.state === 'available' && (
+              <button className="btn sm primary" onClick={() => openExternal(u.releaseUrl ?? 'https://github.com/dominicplouffe/CloudPennies/releases/latest')}>
+                <Icon name="ext" size={13} /> Download
+              </button>
+            )}
+            <button className="btn sm" disabled={u.state === 'checking' || u.state === 'downloading'} onClick={() => void s.checkForUpdates()}>
+              Check now
+            </button>
+          </div>
         </div>
       </div>
     </>

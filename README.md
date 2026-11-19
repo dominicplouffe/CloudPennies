@@ -38,6 +38,7 @@ It is built for someone who owns an AWS bill and has ten minutes, not an afterno
 - **Whole-organization resource scan.** Give CloudPennies the name of a read-only role that exists in each member account and it assumes that role to inspect every account, not only the one the key belongs to. See [`docs/MEMBER_ROLE.md`](docs/MEMBER_ROLE.md).
 - **Scheduled scans and alerts.** Rescans on a schedule while running (optionally from the menu bar or tray), with desktop notifications for new anomalies, commitments approaching expiry and new opportunities. Optional Slack webhook for alerts and a Monday digest.
 - **Progress tracking.** Each scan is remembered. Opportunities that disappear are counted as resolved savings, with a trend of what is still on the table.
+- **Purchase planner.** On the Commitments page: a savings curve across every Savings Plan commitment level, with safe, best-fit and AWS-recommended points, a usage-drop stress test, how far usage can fall before a plan stops paying off, and the effect of plans that are about to expire.
 - **Cost by resource, with history.** CloudPennies imports your Cost and Usage Report from S3 (Data Exports / CUR 2.0 or legacy, Parquet or CSV) and keeps a compact summary locally, so Explore can split any view by individual resource for whole months. Without a report it falls back to Cost Explorer's last 14 days. See [`docs/CUR.md`](docs/CUR.md).
 
 ### What it looks for
@@ -86,7 +87,7 @@ npm run dist:win
 
 Installers land in `release/`. macOS builds must be made on a Mac; a ready-made GitHub Actions workflow builds all three platforms when you push a tag such as `v0.1.0`. To enable it, move the two files in `docs/github-workflows/` to `.github/workflows/`.
 
-Builds are unsigned unless you add signing credentials. On macOS, right-click the app and choose **Open** the first time.
+Builds are unsigned unless you add signing credentials; [`docs/SIGNING.md`](docs/SIGNING.md) explains how. An unsigned macOS build is blocked on first launch: open **System Settings → Privacy & Security** and choose **Open Anyway**. Unsigned macOS builds also cannot update themselves; the app offers a download link instead.
 
 ## Connecting your AWS account
 
@@ -104,7 +105,7 @@ You can connect with an access key or pick a profile from `~/.aws`.
 ### Privacy and cost
 
 - Your key is encrypted with the operating system keychain (Electron `safeStorage`) and stored only on your computer. If you choose a profile, only its name is stored.
-- CloudPennies has no server. It talks to AWS APIs and nothing else — no telemetry, no update pings. The one exception is a Slack webhook, and only if you add one: it receives alert titles and dollar amounts.
+- CloudPennies has no server and no telemetry. It talks to AWS APIs, and packaged builds ask GitHub Releases whether a newer version exists (turn this off in Settings → About). The one exception is a Slack webhook, and only if you add one: it receives alert titles and dollar amounts.
 - AWS charges $0.01 per Cost Explorer API request. A full scan typically makes 30–80 requests. Results are cached on disk, and the app shows the request count for every scan.
 
 ## How it works
@@ -148,7 +149,7 @@ npm run demo-report
 - Savings marked "rough estimate" are inferred from billing data with stated assumptions. Treat them as leads, not quotes.
 - The Cost and Usage Report reader is tested against generated Parquet and CSV files only, not real AWS exports. Tags are not imported from the report, and only the largest resources are kept individually.
 - AWS only. Kubernetes cost allocation, unit economics, custom cost groupings and commitment what-if modelling are not built yet.
-- Builds are unsigned and do not auto-update.
+- Signing, notarization and macOS/Windows auto-update are configured but have never been exercised with real certificates. The purchase planner models daily usage and Compute Savings Plans only.
 
 ## License
 

@@ -40,7 +40,7 @@ function apply(event: UpdaterEvent): UpdateStatus {
 }
 
 const log = (what: string, e: unknown): void => {
-  console.warn(`[cloudpennies] updater: ${what}: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+  console.warn(`[cloudpennies] updater: ${what}: ${(e instanceof Error ? e.message : String(e)).split('\n')[0]}`);
 };
 
 /** electron-updater creates its updater on first access; that only ever happens in a packaged app. */

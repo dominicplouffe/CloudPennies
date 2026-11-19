@@ -1,8 +1,8 @@
 {
   "name": "cloudpennies",
   "productName": "CloudPennies",
-  "version": "0.3.0",
-  "description": "CloudPennies — Every cloud dollar has a story. A simple, deep AWS cost analysis desktop app.",
+  "version": "0.4.0",
+  "description": "CloudPennies \u2014 Every cloud dollar has a story. A simple, deep AWS cost analysis desktop app.",
   "author": "CloudPennies",
   "license": "MIT",
   "private": true,

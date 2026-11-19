@@ -1,0 +1,90 @@
+name: Release
+# Builds installers for macOS, Linux and Windows.
+# Runs when a version tag (v1.2.3) is pushed, or manually from the Actions tab.
+#
+# Signing is optional and driven by repository secrets (see docs/SIGNING.md):
+#   macOS    CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+#   Windows  WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD
+# Without them the build is unsigned.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: mac
+          - os: ubuntu-latest
+            target: linux
+          - os: windows-latest
+            target: win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build installers
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          # Secrets cannot be tested in `if:`, and a secret that is not set arrives as an empty string.
+          # The macOS certificate therefore comes in under another name and is only exported as CSC_LINK
+          # when it exists: an empty CSC_LINK breaks the macOS build, and on Windows electron-builder
+          # would fall back to CSC_LINK and try to sign with the Apple certificate.
+          MAC_CSC_LINK: ${{ secrets.CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # Notarization (macOS, only used when the app was signed). Empty values mean "skip".
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows: empty values mean "unsigned".
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if [ "$TARGET" = "mac" ]; then
+            if [ -n "$MAC_CSC_LINK" ]; then
+              echo "macOS certificate found: the app will be signed."
+              export CSC_LINK="$MAC_CSC_LINK"
+              export CSC_KEY_PASSWORD="$MAC_CSC_KEY_PASSWORD"
+            else
+              echo "No macOS certificate: building an unsigned app."
+              export CSC_IDENTITY_AUTO_DISCOVERY=false
+            fi
+          fi
+          npm run "dist:$TARGET"
+      # latest*.yml and *.blockmap are what the in-app updater reads; they must sit next to the installers.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CloudPennies-${{ matrix.target }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.tar.gz
+            release/*.exe
+            release/latest*.yml
+            release/*.blockmap
+          if-no-files-found: error
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.tar.gz
+            release/*.exe
+            release/latest*.yml
+            release/*.blockmap

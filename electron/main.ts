@@ -186,7 +186,7 @@ function buildMenu(): void {
 // ── IPC ──
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const DIM = /^(SERVICE|USAGE_TYPE|REGION|LINKED_ACCOUNT|OPERATION|PURCHASE_TYPE|INSTANCE_TYPE|RECORD_TYPE|TAG:.+)$/;
+const DIM = /^(SERVICE|USAGE_TYPE|REGION|LINKED_ACCOUNT|OPERATION|PURCHASE_TYPE|INSTANCE_TYPE|RECORD_TYPE|RESOURCE_ID|TAG:.+)$/;
 
 /** Rebuild the query from untrusted renderer input so only well-formed values reach AWS. */
 function sanitizeQuery(raw: unknown): CostQuery {
@@ -241,6 +241,9 @@ function registerIpc(): void {
   handle('cp:setSlackWebhook', (url: string | null) => creds.setSlackWebhook(url));
   handle('cp:hasSlackWebhook', () => creds.hasSlackWebhook());
   handle('cp:testNotifications', () => background.testNotifications());
+  handle('cp:getCurStatus', (refresh?: boolean) => background.getCurStatus(refresh === true));
+  // shares the scan lock: never runs next to a scan
+  handle('cp:importCur', () => background.importCur());
 
   handle('cp:loadSnapshot', async (): Promise<Snapshot | null> => {
     const conn = await creds.getConnection();

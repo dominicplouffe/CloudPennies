@@ -62,6 +62,7 @@ import {
   normalizeResourceKeys,
   SETTLED_TTL_MS,
   totalsByKey,
+  resourceLevelStart,
   usesResourceId,
 } from './ce';
 import { addDays, addMonths, diffDays, monthStart, num, todayIso } from './dates';
@@ -103,6 +104,9 @@ import {
 } from './members';
 import { pool } from './pool';
 import { emptyFindings, mergeFindings, scanRegion, type Creds } from './resources';
+import { importCur } from './cur/importer';
+import { buildKnownServices } from './cur/services';
+import { currentCurStore } from './cur/store';
 
 export interface LiveSourceOptions {
   credentials: Creds;
@@ -225,8 +229,30 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
   const inflight = new Map<string, Promise<CostResult>>();
   let queryRequests = 0;
 
+  /**
+   * Resource-level questions are answered from the imported Cost and Usage Report when it covers them:
+   * every month instead of 14 days, and no Cost Explorer request. null = ask Cost Explorer.
+   */
+  async function queryCur(q: CostQuery, today: string): Promise<CostResult | null> {
+    if (!settings.curEnabled || !usesResourceId(q)) return null;
+    try {
+      const cur = await currentCurStore(cacheDir, identity.accountId);
+      if (!cur) return null;
+      // A report that has not been refreshed for days must not shadow the fresher 14 days Cost Explorer has.
+      if (q.start >= resourceLevelStart(today)) {
+        const newest = (await cur.store.readIndex())?.months.filter((m) => m.basis === costBasis).pop();
+        if (!newest || newest.dataThrough < addDays(today, -4)) return null;
+      }
+      return await cur.store.query(q, costBasis);
+    } catch {
+      return null; // an unreadable store is never worse than not having one
+    }
+  }
+
   async function query(q: CostQuery): Promise<CostResult> {
     const today = todayIso(now());
+    const fromCur = await queryCur(q, today);
+    if (fromCur) return fromCur;
     const key = 'q-' + cacheKey(identity.accountId, costBasis, q);
     const ttl = cacheTtlMs(q, today);
     const hit = await readCache<CostResult>(cacheDir, key);
@@ -681,7 +707,7 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
 
     // ── run ──
     const PHASE2_STEPS = 13;
-    total = phase1.length + PHASE2_STEPS + (settings.deepScan ? 1 : 0);
+    total = phase1.length + PHASE2_STEPS + (settings.deepScan ? 1 : 0) + (settings.curEnabled ? 1 : 0);
     report('Connecting to Cost Explorer');
 
     const [monthlyByService, dailyByServiceUsage, dailyByAccount, dailyByRegion, recentByServiceRegion, monthlyByRecordType] = await pool(phase1, 3);
@@ -824,6 +850,32 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
         }
       }
     }
+    // ── phase 4: optional Cost and Usage Report import (resource-level cost history) ──
+    let cur: Snapshot['meta']['cur'];
+    if (settings.curEnabled) {
+      const id = 'cost-and-usage-report';
+      report('Looking for a Cost and Usage Report');
+      try {
+        const r = await importCur({
+          credentials,
+          accountId: identity.accountId,
+          cacheDir,
+          settings,
+          now,
+          known: buildKnownServices(dailyByServiceUsage),
+          onStep: report,
+        });
+        // one warning at most, whatever went wrong
+        if (r.problem) warnings.add({ section: id, message: r.problem.message, ...(r.problem.missingPermission ? { missingPermission: r.problem.missingPermission } : {}) });
+        if (r.selected && r.months.length) cur = { exportName: r.selected.name, months: r.months };
+      } catch (e) {
+        warnings.add(classifyError(id, e));
+      } finally {
+        done++;
+        report('Cost and Usage Report checked');
+      }
+    }
+
     const self = accounts.find((a) => a.id === identity.accountId);
     const snapshot: Snapshot = {
       meta: {
@@ -839,6 +891,7 @@ export function createLiveSource(opts: LiveSourceOptions): LiveSource {
         ceRequests,
         deepScan: settings.deepScan,
         regionsScanned,
+        ...(cur ? { cur } : {}),
         accountsScanned,
         warnings: warnings.list,
       },

@@ -107,7 +107,7 @@ function AnomalyCard({ a }: { a: Anomaly }) {
               </div>
             </div>
           )}
-          <button className="btn sm" style={{ marginTop: 18 }} onClick={() => s.pullThread(a.causes.length === 1 ? { label: a.thread.label, filters: { ...a.thread.filters, USAGE_TYPE: [a.causes[0].key] }, groupBy: 'LINKED_ACCOUNT' } : a.thread)}>
+          <button className="btn sm" style={{ marginTop: 18 }} onClick={() => s.pullThread(a.causes.length === 1 ? { label: a.thread.label, filters: { ...a.thread.filters, USAGE_TYPE: [a.causes[0].key] }, groupBy: s.snapshot?.meta.cur?.months.length ? 'RESOURCE_ID' : 'LINKED_ACCOUNT' } : a.thread)}>
             Pull the thread in {shortService(a.service)} <Icon name="arrow" size={13} />
           </button>
           <Investigate a={a} />

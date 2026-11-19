@@ -26,6 +26,8 @@ const bridge: Bridge = {
   setSlackWebhook: (url) => ipcRenderer.invoke('cp:setSlackWebhook', url),
   hasSlackWebhook: () => ipcRenderer.invoke('cp:hasSlackWebhook'),
   testNotifications: () => ipcRenderer.invoke('cp:testNotifications'),
+  getCurStatus: (refresh) => ipcRenderer.invoke('cp:getCurStatus', refresh === true),
+  importCur: () => ipcRenderer.invoke('cp:importCur'),
   onNavigate: (cb) => {
     const listener = (_e: IpcRendererEvent, target: { page: 'anomalies' | 'commitments' | 'savings' | 'briefing'; focusId?: string }) => cb(target);
     ipcRenderer.on('cp:navigate', listener);

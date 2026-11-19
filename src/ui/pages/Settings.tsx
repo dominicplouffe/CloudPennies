@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { iamPolicyJson } from '../../core/iamPolicy';
 import { diagnostics, reconcile } from '../../core/reconcile';
-import type { Settings } from '../../core/types';
-import { money } from '../../core/util';
+import type { CurStatus, Settings } from '../../core/types';
+import { fmtDateLong, money, monthName } from '../../core/util';
 import { Icon, PageHead } from '../bits';
 import { bridge, openExternal, useStore } from '../store';
 import { ConnectForm } from './Welcome';
@@ -14,7 +14,7 @@ export function SettingsPage() {
   const [copied, setCopied] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const live = snap?.meta.mode === 'live' || s.connection.connected;
-  const policy = iamPolicyJson(true, s.settings.memberRoleName || undefined);
+  const policy = iamPolicyJson(true, s.settings.memberRoleName || undefined, s.settings.curEnabled ? 'YOUR-REPORT-BUCKET' : undefined);
 
   return (
     <>
@@ -100,6 +100,8 @@ export function SettingsPage() {
       <div className="card rows">
         <MemberRole />
       </div>
+
+      <CurSection />
 
       <div className="section-h">
         <h2>Automation</h2>
@@ -193,7 +195,7 @@ export function SettingsPage() {
 
       <div className="section-h">
         <h2>IAM policy</h2>
-        <p>Read-only. Only the first statement is required.</p>
+        <p>Read-only. Only the first statement is required. Replace YOUR-REPORT-BUCKET with the bucket shown above.</p>
       </div>
       <div className="card pad" style={{ display: 'grid', gap: 10 }}>
         <pre className="policy" style={{ maxHeight: 280 }}>
@@ -432,5 +434,192 @@ function Slack() {
         </>
       )}
     </div>
+  );
+}
+
+/** Cost and Usage Report: resource-level cost with history */
+function CurSection() {
+  const s = useStore();
+  const snap = s.snapshot;
+  const [st, setSt] = useState<CurStatus | null>(null);
+  const [busy, setBusy] = useState<'' | 'list' | 'import'>('');
+  const [err, setErr] = useState<string | null>(null);
+  const live = !!bridge && s.connection.connected;
+
+  const load = (refresh: boolean) => {
+    if (!bridge?.getCurStatus) return;
+    setBusy('list');
+    bridge
+      .getCurStatus(refresh)
+      .then(setSt)
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(''));
+  };
+  useEffect(() => {
+    if (live) load(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, snap?.meta.generatedAt]);
+
+  const runImport = async () => {
+    if (!bridge) return;
+    setBusy('import');
+    setErr(null);
+    const r = await bridge.importCur();
+    setBusy('');
+    if (r.ok) setSt(r.status);
+    else setErr(r.error);
+  };
+
+  const months = live ? (st?.months ?? []) : (snap?.meta.cur?.months ?? []);
+  const exports = st?.exports ?? [];
+  const selected = exports.find((e) => e.id === st?.selected);
+  const usable = exports.filter((e) => e.usable);
+
+  return (
+    <>
+      <div className="section-h">
+        <h2>Cost and Usage Report</h2>
+        <p>Which exact resource every dollar went to, for whole months</p>
+      </div>
+      <div className="card rows">
+        <Row
+          title="Import the report during scans"
+          desc="Cost Explorer only keeps cost per resource for 14 days. The Cost and Usage Report, which AWS delivers to an S3 bucket you own, has it for every month. CloudPennies downloads it, keeps a compact summary on this computer, and uses it for the Resource view in Explore."
+        >
+          <Toggle on={s.settings.curEnabled} set={(v) => void s.saveSettings({ ...s.settings, curEnabled: v })} />
+        </Row>
+        <div style={{ padding: '14px 22px' }}>
+          {!live ? (
+            <div className="ink2" style={{ fontSize: 13 }}>
+              {snap?.meta.mode === 'demo'
+                ? `The demo account has ${months.length} months imported from an export called "${snap.meta.cur?.exportName}". Connect an AWS account to use your own.`
+                : 'Connect an AWS account to look for report exports.'}
+            </div>
+          ) : !st ? (
+            <div className="ink2" style={{ fontSize: 13 }}>
+              Looking for exports…
+            </div>
+          ) : (
+            <>
+              {exports.length === 0 ? (
+                <div className="note">
+                  <Icon name="info" size={16} />
+                  <span>
+                    {st.lastError ?? 'No Cost and Usage Report export was found on this account.'}{' '}
+                    {st.missingPermission && (
+                      <>
+                        Missing permission: <code>{st.missingPermission}</code>.{' '}
+                      </>
+                    )}
+                    <button className="link" onClick={() => openExternal('https://github.com/dominicplouffe/CloudPennies/blob/main/docs/CUR.md')}>
+                      How to create one
+                    </button>
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <label className="field" style={{ maxWidth: 520 }}>
+                    Export to read
+                    <select value={s.settings.curExportId} onChange={(e) => void s.saveSettings({ ...s.settings, curExportId: e.target.value })}>
+                      <option value="">Choose automatically{selected ? ` (${selected.name})` : ''}</option>
+                      {exports.map((e) => (
+                        <option key={e.id} value={e.id} disabled={!e.usable}>
+                          {e.name} — {e.kind === 'cur2' ? 'Data Export' : 'legacy report'}, {e.format}
+                          {e.usable ? '' : ' (not usable)'}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {selected && (
+                    <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
+                      s3://{selected.bucket}/{selected.prefix} · {selected.region} · {selected.granularity.toLowerCase()}
+                    </div>
+                  )}
+                  {usable.length === 0 && (
+                    <div className="note warn" style={{ marginTop: 10 }}>
+                      <Icon name="alert" size={16} />
+                      <span>
+                        None of the {exports.length} export{exports.length === 1 ? '' : 's'} can be used: {exports[0].reason ?? 'unsupported configuration'}{' '}
+                        <button className="link" onClick={() => openExternal('https://github.com/dominicplouffe/CloudPennies/blob/main/docs/CUR.md')}>
+                          What is needed
+                        </button>
+                      </span>
+                    </div>
+                  )}
+                  {st.lastError && (
+                    <div className="note err" style={{ marginTop: 10 }}>
+                      <Icon name="alert" size={16} />
+                      <span>
+                        {st.lastError}
+                        {st.missingPermission && (
+                          <>
+                            {' '}
+                            Missing permission: <code>{st.missingPermission}</code>.
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
+              <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button className="btn sm primary" disabled={!!busy || !!s.scanning || usable.length === 0} onClick={() => void runImport()}>
+                  <Icon name="download" size={13} /> {busy === 'import' ? 'Importing…' : months.length ? 'Update now' : 'Import now'}
+                </button>
+                <button className="btn sm" disabled={!!busy} onClick={() => load(true)}>
+                  <Icon name="refresh" size={13} /> Look again
+                </button>
+                <span className="muted" style={{ fontSize: 12.5, marginLeft: 6 }}>
+                  Keep
+                </span>
+                <div className="seg">
+                  {([1, 3, 6, 12] as const).map((v) => (
+                    <button key={v} className={s.settings.curMonths === v ? 'on' : ''} onClick={() => void s.saveSettings({ ...s.settings, curMonths: v })}>
+                      {v} mo
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {err && (
+                <div className="note err" style={{ marginTop: 10 }}>
+                  <Icon name="alert" size={16} />
+                  {err}
+                </div>
+              )}
+            </>
+          )}
+          {months.length > 0 && (
+            <table className="tbl" style={{ marginTop: 14 }}>
+              <thead>
+                <tr>
+                  <th style={{ paddingLeft: 0 }}>Month</th>
+                  <th className="r">Report total</th>
+                  <th className="r">Rows kept</th>
+                  <th className="r" style={{ paddingRight: 0 }}>
+                    Imported
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...months]
+                  .sort((a, b) => b.month.localeCompare(a.month))
+                  .map((m) => (
+                    <tr key={m.month}>
+                      <td style={{ paddingLeft: 0 }}>
+                        {monthName(m.month + '-01')} {m.month.slice(0, 4)} {!m.complete && <span className="badge" style={{ marginLeft: 6 }}>in progress</span>}
+                      </td>
+                      <td className="r">{money(m.cost)}</td>
+                      <td className="r">{m.rows.toLocaleString()}</td>
+                      <td className="r ink2" style={{ paddingRight: 0 }}>
+                        {fmtDateLong(m.ingestedAt)}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
